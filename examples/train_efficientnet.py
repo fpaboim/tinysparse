@@ -1,7 +1,7 @@
 import os
 import time
 import numpy as np
-from extra.efficientnet import EfficientNet
+from models.efficientnet import EfficientNet
 from tinygrad.tensor import Tensor
 from extra.utils import get_parameters, fetch
 from tqdm import trange
