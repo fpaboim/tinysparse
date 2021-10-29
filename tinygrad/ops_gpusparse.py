@@ -1,7 +1,8 @@
 import functools
 import pyopencl as cl
 import numpy as np
-from .densetensor import Function, GPUBuffer
+from .sparsetensor import SparseFunction
+from .densetensor import GPUBuffer
 
 def buffer_new(ctx, shape, zero=False):
   return GPUBuffer(shape, hostbuf=None if not zero else np.zeros(shape, dtype=np.float32))
@@ -30,7 +31,7 @@ def unary_op(ctx, code, x):
   unop(ctx.cl_queue, [np.prod(ret.shape)], None, x.cl, ret.cl)
   return ret
 
-class ReLU(Function):
+class ReLU(SparseFunction):
   def forward(ctx, input):
     ctx.save_for_backward(input)
     return unary_op(ctx, 'max(a, (float)0.)', input)
@@ -39,7 +40,7 @@ class ReLU(Function):
     input, = ctx.saved_tensors
     return binary_op(ctx, 'a * (b >= 0)', grad_output, input)
 
-class Log(Function):
+class Log(SparseFunction):
   def forward(ctx, input):
     ctx.save_for_backward(input)
     return unary_op(ctx, 'log(a)', input)
@@ -48,7 +49,7 @@ class Log(Function):
     input, = ctx.saved_tensors
     return binary_op(ctx, 'a / b', grad_output, input)
 
-class Exp(Function):
+class Exp(SparseFunction):
   def forward(ctx, input):
     ret = unary_op(ctx, 'exp(a)', input)
     ctx.save_for_backward(ret)
@@ -104,7 +105,7 @@ def reduce_op(ctx, code, code2, inp, axis=None, start="0.0"):
     buffer_np(ctx, np.array(osize, dtype=np.int32)))
   return ret
 
-class Sum(Function):
+class Sum(SparseFunction):
   def forward(ctx, input, axis=None):
     if isinstance(axis, int): axis = [axis]
     ctx.save_for_backward(input, axis)
@@ -119,7 +120,7 @@ class Sum(Function):
     output = GPUBuffer(shape, hostbuf=grad_output)
     return binary_op(ctx, 'a+b', output, buffer_new(ctx, input.shape, zero=True))
 
-class Max(Function):
+class Max(SparseFunction):
   def forward(ctx, input, axis=None):
     if isinstance(axis, int): axis = [axis]
     ret = reduce_op(ctx, "out = max(a,out)", "out", input, axis=axis, start="-INFINITY")
@@ -184,7 +185,7 @@ def unbroadcast(ctx, out, in_sh):
   sum_axis = [i for i in range(len(in_sh)) if in_sh[i]==1 and out.shape[i]>1] if in_sh != (1,) else None
   return reduce_op(ctx, "out += a", "out", out, sum_axis)
 
-class Add(Function):
+class Add(SparseFunction):
   def forward(ctx, x, y):
     ctx.save_for_backward(x.shape, y.shape)
     return binary_op(ctx, 'a+b', x, y)
@@ -194,7 +195,7 @@ class Add(Function):
     shape_x, shape_y = ctx.saved_tensors
     return unbroadcast(ctx, grad_x, shape_x), unbroadcast(ctx, grad_y, shape_y),
 
-class Sub(Function):
+class Sub(SparseFunction):
   def forward(ctx, x, y):
     ctx.save_for_backward(x.shape, y.shape)
     return binary_op(ctx, 'a-b', x, y)
@@ -204,7 +205,7 @@ class Sub(Function):
     shape_x, shape_y = ctx.saved_tensors
     return unbroadcast(ctx, grad_x, shape_x), unbroadcast(ctx, grad_y, shape_y),
 
-class Mul(Function):
+class Mul(SparseFunction):
   def forward(ctx, x, y):
     ctx.save_for_backward(x, y)
     return binary_op(ctx, 'a*b', x, y)
@@ -215,7 +216,7 @@ class Mul(Function):
     grad_y = binary_op(ctx, 'a*b', x, grad_output)
     return unbroadcast(ctx, grad_x, x.shape), unbroadcast(ctx, grad_y, y.shape),
 
-class Pow(Function):
+class Pow(SparseFunction):
   def forward(ctx, x, y):
     ctx.save_for_backward(x, y)
     return binary_op(ctx, 'pow(a,b)', x, y)
@@ -230,7 +231,7 @@ class Pow(Function):
 
 # ************* movement ops *************
 
-class Reshape(Function):
+class Reshape(SparseFunction):
   def forward(ctx, x, shape):
     ctx.save_for_backward(x.shape)
     shape = tuple(-np.prod(x.shape) // np.prod(shape) if s == -1 else s for s in shape)
@@ -264,7 +265,7 @@ def perm_axis(ctx, inp, order):
     buffer_np(ctx, np.array(order, dtype=np.int32)))
   return ret
 
-class Transpose(Function):
+class Transpose(SparseFunction):
   def forward(ctx, x, order=(1,0)):
     ctx.save_for_backward(order)
     return perm_axis(ctx, x, order)
@@ -299,7 +300,7 @@ def inner_slice(ctx, x, arg):
     buffer_np(ctx, np.array(shift, dtype=np.int32)))
   return ret
 
-class Slice(Function):
+class Slice(SparseFunction):
   def forward(ctx, x, arg=None):
     ctx.save_for_backward(x.shape)
     return inner_slice(ctx, x, arg)
@@ -311,59 +312,91 @@ class Slice(Function):
 
 # ************* processing ops *************
 
-class Matmul(Function):
+class Matmul(SparseFunction): # input and weights are swapped, legacy..
   def forward(ctx, input, weight):
-    assert input.shape[-1] == weight.shape[-2]
-    cnt = np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
-    isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
-    ret = buffer_new(ctx, list(input.shape[0:-2])+[isize, osize])
+    # print('sprmult:', input, weight)
+    # assert input.shape[-1] == weight.shape[-2]
+    # cnt = 1#np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
+    # isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
+    # print(weight.shape)
+    ret = buffer_new(ctx.cl_ctx, weight.shape)
+    # print("RET:", ret.cl)
 
     matmul = clbuild(ctx.cl_ctx, "matmul", """
-    __kernel void matmul(
-      __global const float *input, __global const float *weight, __global float *res,
-      int isize, int is0, int is1, int msize, int ws0, int ws1, int osize
-   ) {
-      int stride = get_global_id(2);
-
-      int X = get_global_id(0); // isize
-      int Y = get_global_id(1); // osize
-
-      float ret = 0.0;
-      for (int x = 0; x < msize; x++) {
-        ret += input[X * is0 + x * is1 + isize*msize*stride] *
-          weight[Y * ws0 + x * ws1 + msize*osize*stride];
+    // Every global_id_0 works on a row
+    __kernel void matmul(__global  float* matData,     // INPUT MATRIX DATA
+                            __global  uint*  colIdx,
+                            __global  uint*  rowNnz,
+                            uint   ellwidth,
+                            __global  float* vector_x,    // INPUT
+                            __global  float* vector_y    // OUTPUT
+                            ) { // LOCAL SHARED BUFFER
+      uint gid = get_global_id(0);
+      uint nnz    = rowNnz[gid];
+      float sum = 0;
+      for (uint i = 0; i < nnz; i++) {
+        uint index   = gid * ellwidth + i;
+        uint col     = colIdx[index];
+        float aval  = matData[index];
+        float xval  = vector_x[col];
+        printf("aval, xval: %.2f,%.2f:%i-%i \\n", aval, xval, col, index);
+        sum  += aval * xval;
       }
-
-      res[X * osize + Y + isize*osize*stride] = ret;
+      printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
+      vector_y[gid] = sum;
     }""")
-    ctx.save_for_backward(input, weight, matmul, cnt)
+    ctx.save_for_backward(input, weight, matmul)
 
     # (isize,msize) x (msize,osize) = (isize,osize)
-    matmul(ctx.cl_queue, [isize, osize, cnt], None,
-      input.cl, weight.cl, ret.cl, isize,
-      msize, i32(1), msize, i32(1), osize, osize)
+    # print('asfd:', weight.data, ret)
+    matmul(ctx.cl_queue, [weight.shape[0]], None,
+      input.data.cl, input.idxs.cl, input.nnzs.cl, np.uint32(input.ellw), weight.data.cl, ret.cl)
     return ret
 
   def backward(ctx, grad_output):
-    input, weight, matmul, cnt = ctx.saved_tensors
-    isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
+    input, weight, matmul = ctx.saved_tensors
 
-    grad_input = buffer_new(ctx, input.shape)
-    grad_weight = buffer_new(ctx, weight.shape)
+    top_k = 2
+    # print('asdf:', ctx, ctx.cl_queue, ctx.cl_ctx, (weight.shape[0]))
+    grad_input = buffer_new(ctx, (weight.shape[0],1))
+    grad_weight = buffer_new(ctx, (top_k**2,1))
+
 
     # (isize,osize) x (msize,osize) = (isize,msize)
-    matmul(ctx.cl_queue, [isize, msize, cnt], None,
-      grad_output.cl, weight.cl, grad_input.cl, isize,
-      osize, i32(1), osize, osize, i32(1), msize)
+    matmul(ctx.cl_queue, [weight.shape[0]], None,
+      input.datat.cl, input.idxst.cl, input.nnzst.cl, np.uint32(input.ellwt), grad_output.cl, grad_input.cl)
+
+    # genwupdate = clbuild(ctx.cl_ctx, "genwupdate", """
+    # // Every global_id_0 works on a row
+    # __kernel void genwupdate(__global  float* matData,     // INPUT MATRIX DATA
+    #                          __global  uint*  colIdx,
+    #                          __global  uint*  rowNnz,
+    #                          uint   ellwidth,
+    #                          __global  float* vector_x,    // INPUT
+    #                          __global  float* vector_y    // OUTPUT
+    #                          ) { // LOCAL SHARED BUFFER
+    #   uint gid = get_global_id(0);
+    #   uint nnz    = rowNnz[gid];
+    #   float sum = 0;
+    #   for (uint i = 0; i < nnz; i++) {
+    #     uint index   = gid * ellwidth + i;
+    #     uint col     = colIdx[index];
+    #     float aval  = matData[index];
+    #     float xval  = vector_x[col];
+    #     printf("aval, xval: %.2f,%.2f:%i-%i \\n", aval, xval, col, index);
+    #     sum  += aval * xval;
+    #   }
+    #   printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
+    #   vector_y[gid] = sum;
+    # }""")
 
     # (isize,msize) x (isize,osize) = (msize,osize)
-    matmul(ctx.cl_queue, [msize, osize, cnt], None,
-      input.cl, grad_output.cl, grad_weight.cl, msize,
-      i32(1), msize, isize, i32(1), osize, osize)
+    # genwupdate(ctx.cl_queue, [weight.shape[0]], None,
+    #   input.data.cl, input.idxs.cl, input.nnzs.cl, np.uint32(input.ellw), grad_output.data.cl, grad_weight.cl)
 
     return grad_input, grad_weight
 
-class Conv2D(Function):
+class Conv2D(SparseFunction):
   def forward(ctx, x, w, stride=1, groups=1):
     if isinstance(ctx.stride, int): ctx.stride = (ctx.stride, ctx.stride)
     cout,cin,H,W = w.shape

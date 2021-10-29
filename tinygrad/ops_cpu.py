@@ -1,5 +1,5 @@
 import numpy as np
-from .tensor import Function
+from .densetensor import Function
 
 # ************* unary ops *************
 

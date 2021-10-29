@@ -9,13 +9,17 @@ import numpy as np
 from tinygrad.tensor import Tensor, GPU
 from tinygrad.nn import BatchNorm2D
 from extra.utils import get_parameters
-from test_mnist import fetch_mnist
+from test.test_mnist import fetch_mnist
 from extra.training import train, evaluate, sparse_categorical_crossentropy
 import tinygrad.optim as optim
 from extra.augment import augment_img
 GPU = os.getenv("GPU", None) is not None
 QUICK = os.getenv("QUICK", None) is not None
 DEBUG = os.getenv("DEBUG", None) is not None
+
+if GPU:
+  print("** USING GPU **")
+GPU = True
 
 class SqueezeExciteBlock2D:
   def __init__(self, filters):
@@ -106,7 +110,7 @@ if __name__ == "__main__":
   BS = 32
 
   lmbd = 0.00025
-  lossfn = lambda out,y: sparse_categorical_crossentropy(out, y) + lmbd*(model.weight1.abs() + model.weight2.abs()).sum()
+  lossfn = lambda out,y: sparse_categorical_crossentropy(out, y) + lmbd*(model.weight1.abs() + model.weight2.abs()).sum().cpu().data
   X_train, Y_train, X_test, Y_test = fetch_mnist()
   steps = len(X_train)//BS
   np.random.seed(1337)
@@ -115,6 +119,7 @@ if __name__ == "__main__":
     X_test, Y_test = X_test[:BS], Y_test[:BS]
 
   model = BigConvNet()
+  model
 
   if len(sys.argv) > 1:
     try:
