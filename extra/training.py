@@ -13,6 +13,8 @@ def sparse_categorical_crossentropy(out, Y):
   y[range(y.shape[0]),YY] = -1.0*num_classes
   y = y.reshape(list(Y.shape)+[num_classes])
   y = DenseTensor(y)
+  out.gpu()
+  y.gpu()
   return out.mul(y).mean()
 
 def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
@@ -26,8 +28,8 @@ def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categoric
 
     # network
     out = model.forward(x)
-
-    loss = lossfn(out.cpu(), y)
+    # print(out, y)
+    loss = lossfn(out, y)
     optim.zero_grad()
     loss.backward()
     optim.step()

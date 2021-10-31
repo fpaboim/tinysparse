@@ -137,7 +137,7 @@ class DenseTensor(Tensor):
     return ret
 
   def backward(self):
-    print('dense shape grad;', self.shape)
+    # print('dense shape grad;', self.shape)
     # assert self.shape == (1,)
 
     # fill in the first grad with one
@@ -150,10 +150,10 @@ class DenseTensor(Tensor):
         grads = t0._ctx.backward(t0._ctx, t0.grad.data)
       if len(t0._ctx.parents) == 1:
         grads = [grads]
-      print("PRT:", t0._ctx.parents)
-      print("GRDS:", grads)
+      # print("PRT:", t0._ctx.parents)
+      # print("GRDS:", grads)
       for t, g in zip(t0._ctx.parents, grads):
-        print("T/g:",t,g)
+        # print("T/g:",t,g)
         try:
           if t.is_sparse():
             print("SPARSE!")
@@ -161,7 +161,8 @@ class DenseTensor(Tensor):
             t.grad = gt if t.grad is None else (t.grad + gt)
             continue
         except Exception as e:
-          print("ERR:", e)
+          # print("ERR:", e)
+          pass
         if g is not None:
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"
@@ -364,7 +365,7 @@ if os.getenv("CHERRY", None) is not None:
   from extra import ops_cherry
   _register_ops(ops_cherry)
 try:
-  print("TRY GPU")
+  # print("TRY GPU")
   import pyopencl as cl
   # TODO: move this import to require_init_gpu?
   from tinygrad import ops_gpu
