@@ -2,7 +2,8 @@ import os
 import numpy as np
 from tqdm import trange
 from extra.utils import get_parameters
-from tinygrad.tensor import Tensor, GPU, Device
+from tinygrad.tensor import Device
+from tinygrad.densetensor import DenseTensor, Device, GPU
 
 def sparse_categorical_crossentropy(out, Y):
   num_classes = out.shape[-1]
@@ -11,16 +12,16 @@ def sparse_categorical_crossentropy(out, Y):
   # correct loss for NLL, torch NLL loss returns one per row
   y[range(y.shape[0]),YY] = -1.0*num_classes
   y = y.reshape(list(Y.shape)+[num_classes])
-  y = Tensor(y)
+  y = DenseTensor(y)
   return out.mul(y).mean()
 
 def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
         transform=lambda x: x, target_transform=lambda x: x):
-  Tensor.training = True
+  DenseTensor.training = True
   losses, accuracies = [], []
   for i in (t := trange(steps, disable=os.getenv('CI') is not None)):
     samp = np.random.randint(0, X_train.shape[0], size=(BS))
-    x = Tensor(transform(X_train[samp])).gpu()
+    x = DenseTensor(transform(X_train[samp])).gpu()
     y = target_transform(Y_train[samp])
 
     # network
@@ -42,11 +43,11 @@ def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categoric
 
 def evaluate(model, X_test, Y_test, num_classes=None, BS=128, return_predict=False, transform=lambda x: x,
              target_transform=lambda y: y):
-  Tensor.training = False
+  DenseTensor.training = False
   def numpy_eval(Y_test, num_classes):
     Y_test_preds_out = np.zeros(list(Y_test.shape)+[num_classes])
     for i in trange((len(Y_test)-1)//BS+1, disable=os.getenv('CI') is not None):
-      x = Tensor(transform(X_test[i*BS:(i+1)*BS]))
+      x = DenseTensor(transform(X_test[i*BS:(i+1)*BS]))
       Y_test_preds_out[i*BS:(i+1)*BS] = model.forward(x).cpu().data
     Y_test_preds = np.argmax(Y_test_preds_out, axis=-1)
     Y_test = target_transform(Y_test)

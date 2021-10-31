@@ -189,6 +189,9 @@ class SparseTensor(Tensor):
         return ndata
     return data
 
+  def is_sparse(self):
+    return True
+
   def to_(self, device):
     self.data, self.device = self._move_data(self.data, device), device
     if self.grad: self.grad.to_(device)
@@ -203,7 +206,7 @@ class SparseTensor(Tensor):
 
   def backward(self):
     print('sparse grad shape:', self.shape)
-    assert self.shape == (1,)
+    # assert self.shape == (1,)
 
     # fill in the first grad with one
     # this is "implicit gradient creation"
@@ -213,6 +216,7 @@ class SparseTensor(Tensor):
       assert (t0.grad is not None)
       with ProfileOp(t0._ctx.__class__.__name__, [t0.grad], backward=True) as po:
         grads = t0._ctx.backward(t0._ctx, t0.grad.data)
+        print("GRDS:", grads)
       if len(t0._ctx.parents) == 1:
         grads = [grads]
       for t, g in zip(t0._ctx.parents, grads):

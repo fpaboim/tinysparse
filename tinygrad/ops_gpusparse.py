@@ -348,7 +348,6 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     ctx.save_for_backward(input, weight, matmul)
 
     # (isize,msize) x (msize,osize) = (isize,osize)
-    # print('asfd:', weight.data, ret)
     matmul(ctx.cl_queue, [weight.shape[0]], None,
       input.data.cl, input.idxs.cl, input.nnzs.cl, np.uint32(input.ellw), weight.data.cl, ret.cl)
     return ret
@@ -356,45 +355,73 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
   def backward(ctx, grad_output):
     input, weight, matmul = ctx.saved_tensors
 
-    top_k = 2
+    topk = 4
     # print('asdf:', ctx, ctx.cl_queue, ctx.cl_ctx, (weight.shape[0]))
-    grad_input = buffer_new(ctx, (weight.shape[0],1))
-    grad_weight = buffer_new(ctx, (top_k**2,1))
+    grad_input = buffer_new(ctx, (weight.shape[0],))
+    grad_weight = buffer_new(ctx, (topk**2,))
 
 
+    # Grad update
     # (isize,osize) x (msize,osize) = (isize,msize)
+    # print('asfd:', grad_output.cpu().data, ret)
     matmul(ctx.cl_queue, [weight.shape[0]], None,
       input.datat.cl, input.idxst.cl, input.nnzst.cl, np.uint32(input.ellwt), grad_output.cl, grad_input.cl)
 
-    # genwupdate = clbuild(ctx.cl_ctx, "genwupdate", """
-    # // Every global_id_0 works on a row
-    # __kernel void genwupdate(__global  float* matData,     // INPUT MATRIX DATA
-    #                          __global  uint*  colIdx,
-    #                          __global  uint*  rowNnz,
-    #                          uint   ellwidth,
-    #                          __global  float* vector_x,    // INPUT
-    #                          __global  float* vector_y    // OUTPUT
-    #                          ) { // LOCAL SHARED BUFFER
-    #   uint gid = get_global_id(0);
-    #   uint nnz    = rowNnz[gid];
-    #   float sum = 0;
-    #   for (uint i = 0; i < nnz; i++) {
-    #     uint index   = gid * ellwidth + i;
-    #     uint col     = colIdx[index];
-    #     float aval  = matData[index];
-    #     float xval  = vector_x[col];
-    #     printf("aval, xval: %.2f,%.2f:%i-%i \\n", aval, xval, col, index);
-    #     sum  += aval * xval;
-    #   }
-    #   printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
-    #   vector_y[gid] = sum;
-    # }""")
+
+    # Weight update
+    x_idx_buf = cl.Buffer(ctx.cl_ctx, cl.mem_flags.WRITE_ONLY, 4*topk)
+    y_idx_buf = cl.Buffer(ctx.cl_ctx, cl.mem_flags.WRITE_ONLY, 4*topk)
+    genwupdate2 = clbuild(ctx.cl_ctx, "genwupdate2", """
+    // sorts x and y in ascending order and returns sorted indices
+    __kernel void genwupdate2(__global  float* x,     // INPUT MATRIX DATA
+                             __global  float* y,    // INPUT
+                             __global  float* xout,    // INPUT
+                             uint topk,
+                             __global  uint* xoutidx,    // INPUT
+                             __global  uint* youtidx    // INPUT
+                            ) { // LOCAL SHARED BUFFER
+      uint gid = get_global_id(0);
+      uint n = get_global_size(0);
+
+      xout[gid] = x[gid];
+      xoutidx[gid] = gid;
+      youtidx[gid] = gid;
+
+      float valx = x[gid];
+      float valy = y[gid];
+      uint posx = 0;
+      uint posy = 0;
+      for (uint i = 0; i < n; i++) {
+        float tempval = x[i];
+        float tempval2 = y[i];
+        bool larger = tempval > valx;
+        bool larger2 = tempval2 > valy;
+
+        posx += (larger)?1:0;
+        posy += (larger2)?1:0;
+      }
+      //printf("posx:%i", posx);
+      if (posx < topk) {
+        xoutidx[posx] = gid;
+      }
+      if (posy < topk) {
+        youtidx[posy] = gid;
+      }
+      if (gid < topk) {
+        uint i = gid;
+        for (uint j=0; j<topk; j++) {
+          xout[gid*topk+j] = x[xoutidx[gid]] * y[youtidx[j]];
+        }
+      }
+    }""")
 
     # (isize,msize) x (isize,osize) = (msize,osize)
-    # genwupdate(ctx.cl_queue, [weight.shape[0]], None,
-    #   input.data.cl, input.idxs.cl, input.nnzs.cl, np.uint32(input.ellw), grad_output.data.cl, grad_weight.cl)
+    genwupdate2(ctx.cl_queue, [weight.shape[0]], None,
+      weight.data.cl, grad_output.cl, grad_weight.cl, np.uint32(topk), x_idx_buf, y_idx_buf)
 
-    return grad_input, grad_weight
+    # gen alt data structure to add grad evetually in the optimizer
+
+    return (grad_weight, x_idx_buf, y_idx_buf), grad_input
 
 class Conv2D(SparseFunction):
   def forward(ctx, x, w, stride=1, groups=1):

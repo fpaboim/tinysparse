@@ -6,7 +6,7 @@ sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), 'test'))
 
 import numpy as np
-from tinygrad.densetensor import  GPU, DenseTensor
+from tinygrad.tensor import Tensor, GPU
 from tinygrad.nn import BatchNorm2D
 from extra.utils import get_parameters
 from test.test_mnist import fetch_mnist
@@ -24,10 +24,10 @@ GPU = True
 class SqueezeExciteBlock2D:
   def __init__(self, filters):
     self.filters = filters
-    self.weight1 = DenseTensor.uniform(self.filters, self.filters//32)
-    self.bias1 = DenseTensor.uniform(1,self.filters//32)
-    self.weight2 = DenseTensor.uniform(self.filters//32, self.filters)
-    self.bias2 = DenseTensor.uniform(1, self.filters)
+    self.weight1 = Tensor.uniform(self.filters, self.filters//32)
+    self.bias1 = Tensor.uniform(1,self.filters//32)
+    self.weight2 = Tensor.uniform(self.filters//32, self.filters)
+    self.bias2 = Tensor.uniform(1, self.filters)
 
   def __call__(self, input):
     se = input.avg_pool2d(kernel_size=(input.shape[2], input.shape[3])) #GlobalAveragePool2D
@@ -44,8 +44,8 @@ class ConvBlock:
     self.h, self.w = h, w
     self.inp = inp
     #init weights
-    self.cweights = [DenseTensor.uniform(filters, inp if i==0 else filters, conv, conv) for i in range(3)]
-    self.cbiases = [DenseTensor.uniform(1, filters, 1, 1) for i in range(3)]
+    self.cweights = [Tensor.uniform(filters, inp if i==0 else filters, conv, conv) for i in range(3)]
+    self.cbiases = [Tensor.uniform(1, filters, 1, 1) for i in range(3)]
     #init layers
     self._bn = BatchNorm2D(128, training=True)
     self._seb = SqueezeExciteBlock2D(filters)
@@ -61,8 +61,8 @@ class ConvBlock:
 class BigConvNet:
   def __init__(self):
     self.conv = [ConvBlock(28,28,1), ConvBlock(28,28,128), ConvBlock(14,14,128)]
-    self.weight1 = DenseTensor.uniform(128,10)
-    self.weight2 = DenseTensor.uniform(128,10)
+    self.weight1 = Tensor.uniform(128,10)
+    self.weight2 = Tensor.uniform(128,10)
 
   def parameters(self):
     if DEBUG: #keeping this for a moment

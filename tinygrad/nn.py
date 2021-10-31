@@ -1,14 +1,14 @@
-from tinygrad.tensor import Tensor
+from tinygrad.densetensor import DenseTensor
 import numpy as np
 
 class BatchNorm2D:
   def __init__(self, sz, eps=1e-5, track_running_stats=False, training=False, momentum=0.1):
     self.eps, self.track_running_stats, self.training, self.momentum = eps, track_running_stats, training, momentum
 
-    self.weight, self.bias = Tensor.ones(sz), Tensor.zeros(sz)
+    self.weight, self.bias = DenseTensor.ones(sz), DenseTensor.zeros(sz)
 
-    self.running_mean, self.running_var = Tensor.zeros(sz, requires_grad=False), Tensor.ones(sz, requires_grad=False)
-    self.num_batches_tracked = Tensor.zeros(1, requires_grad=False)
+    self.running_mean, self.running_var = DenseTensor.zeros(sz, requires_grad=False), DenseTensor.ones(sz, requires_grad=False)
+    self.num_batches_tracked = DenseTensor.zeros(1, requires_grad=False)
 
   def __call__(self, x):
     if self.track_running_stats or self.training:
@@ -19,7 +19,7 @@ class BatchNorm2D:
     if self.track_running_stats:
       self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * batch_mean
       self.running_var = (1 - self.momentum) * self.running_var + self.momentum * batch_var
-      if self.num_batches_tracked is None: self.num_batches_tracked = Tensor.zeros(1, requires_grad=False)
+      if self.num_batches_tracked is None: self.num_batches_tracked = DenseTensor.zeros(1, requires_grad=False)
       self.num_batches_tracked += 1
 
     if self.training:
@@ -36,9 +36,9 @@ class Linear:
     self.in_dim = in_dim
     self.out_dim = out_dim
     self.use_bias = bias
-    self.weight = Tensor.uniform(in_dim, out_dim)
+    self.weight = DenseTensor.uniform(in_dim, out_dim)
     if self.use_bias:
-      self.bias = Tensor.zeros(out_dim)
+      self.bias = DenseTensor.zeros(out_dim)
 
   def __call__(self, x):
     B, *dims, D = x.shape
@@ -67,9 +67,9 @@ class Conv2d:
     self.stride = (stride, stride) if isinstance(stride, int) else (stride[0], stride[1])
     self.padding = (padding, ) * 4 if isinstance(padding, int) else (padding[0], padding[0], padding[1], padding[1])
     self.use_bias = bias
-    self.weight = Tensor.uniform(out_channels, in_channels, self.kernel_size[0], self.kernel_size[1])
+    self.weight = DenseTensor.uniform(out_channels, in_channels, self.kernel_size[0], self.kernel_size[1])
     if self.use_bias:
-      self.bias = Tensor.uniform(out_channels)
+      self.bias = DenseTensor.uniform(out_channels)
 
   def __call__(self, x):
     if self.padding[0] > 0:

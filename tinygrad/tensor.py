@@ -8,6 +8,9 @@ class Tensor:
   def __init__(self, data, device=DEFAULT_DEVICE, requires_grad=True):
     pass
 
+  def is_sparse(self):
+    return False
+
   def deepwalk(self):
     def _deepwalk(node, visited, nodes):
       visited.add(node)
