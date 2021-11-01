@@ -44,15 +44,22 @@ class SparseTensor(Tensor):
   training = True
   ops = defaultdict(dict)
 
-  def __init__(self, dense_data, data=[], idxs=[], nnzs=[], ellw=None,
-               shape=None, device=DEFAULT_DEVICE, requires_grad=True):
+  def __init__(self, dense_data=[], data=[], idxs=[], nnzs=[], ellw=None,
+               shape=None, randinit=[], randsparsity=0.5, device=DEFAULT_DEVICE, requires_grad=True):
     self.device = device
-    print(dense_data)
+    # print('rand:', randinit)
 
-    if len(data)==0:
-      self.shape = dense_data.shape
+    if len(randinit)==0:
+      if len(data)==0:
+        self.shape = dense_data.shape
+      else:
+        self.shape = shape
+      data, idxs, nnzs, ellw = self.to_ell(dense_data)
+      datat, idxst, nnzst, ellwt = self.to_ell(dense_data.T)
     else:
-      self.shape = shape
+      self.shape = randinit
+      data, idxs, nnzs, ellw, datat, idxst, nnzst, ellwt = self.make_random(randinit, sparsity=randsparsity)
+      # datat, idxst, nnzst, ellwt = self.make_random(randinit)
 
     if len(data)==0:
       data, idxs, nnzs, ellw = self.to_ell(dense_data)
@@ -60,8 +67,9 @@ class SparseTensor(Tensor):
       # data = np.expand_dims(data, 1)
       # idxs = np.expand_dims(idxs, 1)
       # nnzs = np.expand_dims(nnzs, 1)
-    else:
-      print("HAS DATA:", data)
+    # else:
+    #   print("HAS DATA:")
+    #   print(data, idxs, nnzs, ellw)
 
     self.data = self._move_data(data, device, np.float32)
     self.idxs = self._move_data(idxs, device, np.uint32)
@@ -72,6 +80,7 @@ class SparseTensor(Tensor):
     self.idxst = self._move_data(idxst, device, np.uint32)
     self.nnzst = self._move_data(nnzst, device, np.uint32)
     self.ellwt = ellwt
+
 
 
     self.grad, self.requires_grad = None, requires_grad
@@ -101,7 +110,7 @@ class SparseTensor(Tensor):
         submat = mat[i]
         newmax = len(submat[submat != 0])
         maxnnz = max(maxnnz, newmax)
-      ellwidth = maxnnz
+      ellwidth = maxnnz*2
     # print("ELLW:", ellwidth)
     all_rows = []
     all_idxs = []
@@ -127,6 +136,63 @@ class SparseTensor(Tensor):
     all_nnzs = np.array(all_nnzs).astype(np.uint32)
     return all_rows, all_idxs, all_nnzs, ellwidth
 
+  def make_random(self, shape, sparsity=0.9):
+    all_rows = []
+    all_idxs = []
+    all_nnzs = []
+    nnzs = int(shape[1]*(1-sparsity))
+    ellwidth = int((nnzs/2)+1)*4
+    cols = {}
+    for row in range(shape[0]):
+      rowdata = np.random.rand(nnzs) / nnzs
+      rowidx = np.random.permutation(shape[1])[:nnzs]
+      i = 0
+      for col in rowidx:
+        if not col in cols.keys():
+          cols[col] = [(rowdata[i],row)]
+        else:
+          cols[col].append((rowdata[i],row))
+        i += 1
+
+      while len(rowdata) < ellwidth:
+        rowdata = np.concatenate([rowdata, np.array([0])])
+        rowidx  = np.concatenate([rowidx, np.array([0])])
+      all_rows.append(rowdata)
+      all_idxs.append(rowidx)
+      all_nnzs.append(nnzs)
+
+    all_rowst = []
+    all_idxst = []
+    all_nnzst = []
+    maxw = 0
+    for row in range(shape[1]):
+      try:
+        all_rowst.append([val[0] for val in cols[row]])
+        all_idxst.append([val[1] for val in cols[row]])
+        all_nnzst.append(len(cols[row]))
+        maxw = max(len(cols[row]), maxw)
+        # print('masw:', maxw)
+      except:
+        all_rowst.append([])
+        all_idxst.append([])
+        all_nnzst.append(0)
+    ellwidtht = (int(maxw/2)+1)*2
+    # print('ellwt:', ellwidtht)
+    for irow in range(len(all_rowst)):
+      # print(all_rowst[irow])
+      all_rowst[irow] = np.concatenate([all_rowst[irow], np.zeros(ellwidtht-len(all_rowst[irow]))])
+      all_idxst[irow] = np.concatenate([all_idxst[irow], np.zeros(ellwidtht-len(all_idxst[irow]))])
+      # print(all_rowst[irow])
+
+
+    all_rows = np.array(all_rows).astype(np.float32).flatten()
+    all_idxs = np.array(all_idxs).astype(np.uint32).flatten()
+    all_nnzs = np.array(all_nnzs).astype(np.uint32)
+    all_rowst = np.array(all_rowst).astype(np.float32).flatten()
+    all_idxst = np.array(all_idxst).astype(np.uint32).flatten()
+    all_nnzst = np.array(all_nnzst).astype(np.uint32)
+    return all_rows, all_idxs, all_nnzs, ellwidth, all_rowst, all_idxst, all_nnzst, ellwidtht
+
   # ***** creation helper functions *****
 
   @classmethod
@@ -147,7 +213,7 @@ class SparseTensor(Tensor):
 
   @classmethod
   def uniform(cls, *shape, **kwargs):
-    return cls((np.random.uniform(-1., 1., size=shape)/np.sqrt(np.prod(shape))).astype(np.float32), **kwargs)
+    return cls(randinit=shape, **kwargs)
 
   @classmethod
   def eye(cls, dim, **kwargs):
@@ -192,6 +258,115 @@ class SparseTensor(Tensor):
   def is_sparse(self):
     return True
 
+  def updategrad(self, grad, lr):
+    # Weight update
+    ctx = self._ctx
+    # print('ctx:', ctx, self.data)
+    addvals = cl.Program(ctx.cl_ctx,
+     """
+    // Every global_id_0 works on a row
+    __kernel void addvals(__global  float* matData,     // INPUT MATRIX DATA
+                         __global  uint*  colIdx,
+                         __global  uint*  rowNnz,
+                         uint   ellwidth,
+                         __global  float* updatevals,    // INPUT
+                         __global  uint* updatexidx,
+                         __global  uint* updateyidx
+                         ) { // LOCAL SHARED BUFFER
+      uint gid = get_global_id(0);
+      uint n = get_global_size(0);
+      uint row = updateyidx[gid];
+
+      for (uint i=0; i<n; i++) {
+        float val = updatevals[gid*n+i];
+        uint col = updatexidx[i];
+        for (uint i=0; i<rowNnz[row]; i++) {
+          uint idx = gid*ellwidth+i;
+          if (colIdx[idx] >= col) {
+            if (colIdx[idx] == col) {
+              matData[idx] += val;
+              //printf("\\nUPDATE[%i]: %.2f", idx, val);
+              break;
+            } else {
+              // insert new column
+              //printf("\\nINSERT[%i]: %.2f", idx, val);
+              for (uint j=rowNnz[row]+1; j>i; j--) {
+                uint idx2 = gid*ellwidth+j;
+                matData[idx2] = matData[idx2-1];
+                colIdx[idx2] = colIdx[idx2-1];
+              }
+              matData[idx] = val;
+              colIdx[idx] = col;
+              rowNnz[row] += 1;
+              break;
+            }
+          }
+        }
+        if (rowNnz[row] >= ellwidth) {
+          break;
+        }
+      }
+    }""").build().__getattr__('addvals')
+
+    # (isize,msize) x (isize,osize) = (msize,osize)
+    topk = 4
+    # print('grad:', grad)
+    # addvals(ctx.cl_queue, [topk], None,
+    #   self.data.cl, self.idxs.cl, self.nnzs.cl, np.uint32(self.ellw), grad[0].cl, grad[1], grad[2])
+
+    addvals2 = cl.Program(ctx.cl_ctx,
+     """
+    // Every global_id_0 works on a row
+    __kernel void addvals2(__global  float* matData,     // INPUT MATRIX DATA
+                         __global  uint*  colIdx,
+                         __global  uint*  rowNnz,
+                         uint   ellwidth,
+                         __global  float* updatevals,    // INPUT
+                         __global  uint* updatexidx,
+                         __global  uint* updateyidx
+                         ) { // LOCAL SHARED BUFFER
+      uint gid = get_global_id(0);
+      uint n = get_global_size(0);
+      uint col = updateyidx[gid];
+
+      for (uint i=0; i<n; i++) {
+        float val = updatevals[gid*n+i];
+        uint row = updatexidx[i];
+        for (uint i=0; i<rowNnz[row]; i++) {
+          uint idx = gid*ellwidth+i;
+          if (colIdx[idx] >= col) {
+            if (colIdx[idx] == col) {
+              matData[idx] += val;
+              //printf("\\nUPDATE2[%i]: %.2f", idx, val);
+              break;
+            } else {
+              // insert new column
+              //printf("\\nINSERT2[%i]: %.2f", idx, val);
+              for (uint j=rowNnz[row]+1; j>i; j--) {
+                uint idx2 = gid*ellwidth+j;
+                matData[idx2] = matData[idx2-1];
+                colIdx[idx2] = colIdx[idx2-1];
+              }
+              matData[idx] = val;
+              colIdx[idx] = col;
+              rowNnz[row] += 1;
+              break;
+            }
+          }
+        }
+        if (rowNnz[row] >= ellwidth) {
+          break;
+        }
+      }
+    }""").build().__getattr__('addvals2')
+
+    # (isize,msize) x (isize,osize) = (msize,osize)
+    topk = 4
+    # print('grad:', grad)
+    # addvals2(ctx.cl_queue, [topk], None,
+    #   self.datat.cl, self.idxst.cl, self.nnzst.cl, np.uint32(self.ellwt), grad[0].cl, grad[1], grad[2])
+    self._ctx = None
+
   def to_(self, device):
     self.data, self.device = self._move_data(self.data, device), device
     if self.grad: self.grad.to_(device)
@@ -205,7 +380,7 @@ class SparseTensor(Tensor):
     return Tensor(self.data, device=self.device)
 
   def backward(self):
-    print('sparse grad shape:', self.shape)
+    # print('dense shape grad;', self.shape)
     # assert self.shape == (1,)
 
     # fill in the first grad with one
@@ -215,11 +390,24 @@ class SparseTensor(Tensor):
     for t0 in reversed(self.deepwalk()):
       assert (t0.grad is not None)
       with ProfileOp(t0._ctx.__class__.__name__, [t0.grad], backward=True) as po:
+        # print('t0:', t0)
         grads = t0._ctx.backward(t0._ctx, t0.grad.data)
-        print("GRDS:", grads)
       if len(t0._ctx.parents) == 1:
         grads = [grads]
+      # print("PRT:", t0._ctx.parents)
+      # print("GRDS:", grads)
       for t, g in zip(t0._ctx.parents, grads):
+        # print("T/g:",t,g)
+        try:
+          if t.is_sparse():
+            # print("SPARSE!",t)
+            t._ctx = t0._ctx
+            gt = g#DenseTensor(g, device=self.device, requires_grad=False)
+            t.grad = gt if t.grad is None else (t.grad + gt)
+            continue
+        except Exception as e:
+          print("ERR:", e)
+          pass
         if g is not None:
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"

@@ -147,7 +147,11 @@ class DenseTensor(Tensor):
     for t0 in reversed(self.deepwalk()):
       assert (t0.grad is not None)
       with ProfileOp(t0._ctx.__class__.__name__, [t0.grad], backward=True) as po:
-        grads = t0._ctx.backward(t0._ctx, t0.grad.data)
+        # print('t0:', t0, t0.grad.cpu().data)
+        try:
+          grads = t0._ctx.backward(t0._ctx, t0.grad.data)
+        except Exception as e:
+          print("EX:", e)
       if len(t0._ctx.parents) == 1:
         grads = [grads]
       # print("PRT:", t0._ctx.parents)
@@ -156,12 +160,13 @@ class DenseTensor(Tensor):
         # print("T/g:",t,g)
         try:
           if t.is_sparse():
-            print("SPARSE!")
+            # print("SPARSE!",g)
+            t._ctx = t0._ctx
             gt = g#DenseTensor(g, device=self.device, requires_grad=False)
             t.grad = gt if t.grad is None else (t.grad + gt)
             continue
         except Exception as e:
-          # print("ERR:", e)
+          print("ERR:", e)
           pass
         if g is not None:
           assert g.shape == t.shape, \

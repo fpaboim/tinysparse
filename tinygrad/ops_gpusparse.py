@@ -4,8 +4,8 @@ import numpy as np
 from .sparsetensor import SparseFunction
 from .densetensor import GPUBuffer
 
-def buffer_new(ctx, shape, zero=False):
-  return GPUBuffer(shape, hostbuf=None if not zero else np.zeros(shape, dtype=np.float32))
+def buffer_new(ctx, shape, zero=False, dtype=np.float32):
+  return GPUBuffer(shape, hostbuf=None if not zero else np.zeros(shape, dtype=dtype))
 
 def buffer_np(ctx, x):
   return cl.Buffer(ctx.cl_ctx, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=x)
@@ -339,10 +339,10 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
         uint col     = colIdx[index];
         float aval  = matData[index];
         float xval  = vector_x[col];
-        printf("aval, xval: %.2f,%.2f:%i-%i \\n", aval, xval, col, index);
+        //printf("aval, xval: %.2f,%.2f:%i-%i \\n", aval, xval, col, index);
         sum  += aval * xval;
       }
-      printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
+      //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
       vector_y[gid] = sum;
     }""")
     ctx.save_for_backward(input, weight, matmul)
@@ -350,23 +350,29 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     # (isize,msize) x (msize,osize) = (isize,osize)
     matmul(ctx.cl_queue, [weight.shape[0]], None,
       input.data.cl, input.idxs.cl, input.nnzs.cl, np.uint32(input.ellw), weight.data.cl, ret.cl)
+
+    resa = np.ones(weight.shape[0]).astype(np.float32)
+    cl.enqueue_copy(ctx.cl_queue, resa, ret.cl)
+    print('RET:', resa)
     return ret
 
   def backward(ctx, grad_output):
     input, weight, matmul = ctx.saved_tensors
 
+    resa = np.ones(weight.shape[0]).astype(np.float32)
+    cl.enqueue_copy(ctx.cl_queue, resa, grad_output.cl)
+    print('RESA:', resa)
+
     topk = 4
     # print('asdf:', ctx, ctx.cl_queue, ctx.cl_ctx, (weight.shape[0]))
-    grad_input = buffer_new(ctx, (weight.shape[0],))
+    grad_input = buffer_new(ctx, (weight.shape))
     grad_weight = buffer_new(ctx, (topk**2,))
 
 
     # Grad update
     # (isize,osize) x (msize,osize) = (isize,msize)
-    # print('asfd:', grad_output.cpu().data, ret)
     matmul(ctx.cl_queue, [weight.shape[0]], None,
       input.datat.cl, input.idxst.cl, input.nnzst.cl, np.uint32(input.ellwt), grad_output.cl, grad_input.cl)
-
 
     # Weight update
     x_idx_buf = cl.Buffer(ctx.cl_ctx, cl.mem_flags.WRITE_ONLY, 4*topk)
@@ -382,6 +388,13 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
                             ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
       uint n = get_global_size(0);
+
+      if (gid == 0) {
+        for (int i=0; i<n; i++) {
+          if (y[i] > 0)
+            printf("\\nx[%i]:%.2f", i, y[i]);
+        }
+      }
 
       xout[gid] = x[gid];
       xoutidx[gid] = gid;
@@ -410,7 +423,9 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       if (gid < topk) {
         uint i = gid;
         for (uint j=0; j<topk; j++) {
-          xout[gid*topk+j] = x[xoutidx[gid]] * y[youtidx[j]];
+          float res = x[xoutidx[gid]] * y[youtidx[j]];
+          //printf("\\nRES:%.2f - %i - %i -  %.2f - %.2f",res, xoutidx[gid], youtidx[j], x[xoutidx[gid]], y[youtidx[j]]);
+          xout[gid*topk+j] = res;
         }
       }
     }""")

@@ -103,11 +103,51 @@ class BigConvNet:
     xo = x1.dot(self.weight1) + x2.dot(self.weight2)
     return xo.logsoftmax()
 
+class MLP:
+  def __init__(self):
+    # self.weight1 = DenseTensor.uniform(784,32)
+    self.weight1 = SparseTensor.uniform(784,784)
+    self.weight2 = DenseTensor.uniform(32,10)
+
+  def parameters(self):
+    if DEBUG: #keeping this for a moment
+      pars = [par for par in get_parameters(self) if par.requires_grad]
+      no_pars = 0
+      for par in pars:
+        print(par.shape)
+        no_pars += np.prod(par.shape)
+      print('no of parameters', no_pars)
+      return pars
+    else:
+      return get_parameters(self)
+
+  def save(self, filename):
+    with open(filename+'.npy', 'wb') as f:
+      for par in get_parameters(self):
+        #if par.requires_grad:
+        np.save(f, par.cpu().data)
+
+  def load(self, filename):
+    with open(filename+'.npy', 'rb') as f:
+      for par in get_parameters(self):
+        #if par.requires_grad:
+        try:
+          par.cpu().data[:] = np.load(f)
+          if GPU:
+            par.gpu()
+        except:
+          print('Could not load parameter')
+
+  def forward(self, x):
+    x = x.dot(self.weight1).relu()
+    x = x.dot(self.weight2)
+    return x.logsoftmax()
+
 
 if __name__ == "__main__":
   lrs = [1e-4, 1e-5] if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
   epochss = [2, 1] if QUICK else [13, 3, 3, 1]
-  BS = 32
+  BS = 128
 
   lmbd = 0.00025
   lossfn = lambda out,y: sparse_categorical_crossentropy(out, y) #+ lmbd*(model.weight1.abs() + model.weight2.abs()).sum().cpu().data
@@ -118,7 +158,7 @@ if __name__ == "__main__":
     steps = 1
     X_test, Y_test = X_test[:BS], Y_test[:BS]
 
-  model = BigConvNet()
+  model = MLP()
   model
 
   if len(sys.argv) > 1:
