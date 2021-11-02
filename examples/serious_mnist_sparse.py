@@ -25,7 +25,7 @@ if GPU:
 class MLP:
   def __init__(self):
     # self.weight1 = DenseTensor.uniform(784,32)
-    self.weight1 = SparseTensor.uniform(784,784)
+    self.weight1 = SparseTensor.uniform(784,784, randsparsity=0.8)
     self.weight11 = DenseTensor.uniform(784,32)
     self.weight2 = DenseTensor.uniform(32,10)
 
@@ -45,7 +45,11 @@ class MLP:
     with open(filename+'.npy', 'wb') as f:
       for par in get_parameters(self):
         #if par.requires_grad:
-        np.save(f, par.cpu().data)
+        print("PAR:", par)
+        if par.is_sparse():
+          np.save(f, par.cpu())
+        else:
+          np.save(f, par.cpu().data)
 
   def load(self, filename):
     with open(filename+'.npy', 'rb') as f:
@@ -56,7 +60,7 @@ class MLP:
           if GPU:
             par.gpu()
         except:
-          print('Could not load parameter')
+          print('Could not load parameter', par)
 
   def forward(self, x):
     x = self.weight1.dot(x).relu()
@@ -68,7 +72,7 @@ class MLP:
 if __name__ == "__main__":
   # lrs = [1e-4, 1e-5] if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
   # epochss = [2, 1] if QUICK else [13, 3, 3, 1]
-  BS = 4
+  BS = 128
 
   lmbd = 0.00025
   lossfn = lambda out,y: sparse_categorical_crossentropy(out, y) #+ lmbd*(model.weight1.abs() + model.weight2.abs()).sum().cpu().data
@@ -94,14 +98,14 @@ if __name__ == "__main__":
     params = get_parameters(model)
     [x.gpu_() for x in params]
 
-  lr = 100
+  lr = 0.001
   epochs = 100
   optimizer = optim.SGD(model.parameters(), lr=lr)
+  X_train = X_train / 255
+  X_test = X_test / 255
   for epoch in range(1,epochs+1):
     #first epoch without augmentation
     # X_aug = X_train if epoch == 1 else augment_img(X_train)
-    X_train = X_train / 255
     train(model, X_train, Y_train, optimizer, steps=steps, lossfn=lossfn, BS=BS)
-    X_test = X_test / 255
     accuracy = evaluate(model, X_test, Y_test, BS=BS)
     # model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')

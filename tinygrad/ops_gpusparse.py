@@ -1,7 +1,7 @@
 import functools
 import pyopencl as cl
 import numpy as np
-from .sparsetensor import SparseFunction
+from .sparsetensor import SparseFunction, topk
 from .densetensor import GPUBuffer
 
 def buffer_new(ctx, shape, zero=False, dtype=np.float32):
@@ -314,7 +314,7 @@ class Slice(SparseFunction):
 
 class Matmul(SparseFunction): # input and weights are swapped, legacy..
   def forward(ctx, input, weight):
-    print("WEGHT:", weight.shape)
+    # print("WEGHT:", input, weight.shape)
     BS = weight.shape[0]
     # print('sprmult:', input, weight)
     # assert input.shape[-1] == weight.shape[-2]
@@ -357,8 +357,8 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     matmul(ctx.cl_queue, [weight.shape[1], weight.shape[0]], None,
       input.data.cl, input.idxs.cl, input.nnzs.cl, np.uint32(input.ellw), weight.data.cl, ret.cl)
 
-    resa = np.zeros(weight.shape).astype(np.float32)
-    cl.enqueue_copy(ctx.cl_queue, resa, ret.cl)
+    # resa = np.zeros(weight.shape).astype(np.float32)
+    # cl.enqueue_copy(ctx.cl_queue, resa, ret.cl)
     # print("RES:", resa)
 
     # print("LEN:", weight)
@@ -368,31 +368,26 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
   def backward(ctx, grad_output):
     input, weight, matmul = ctx.saved_tensors
 
-    # resa = np.zeros(weight.shape).astype(np.float32)
-    # cl.enqueue_copy(ctx.cl_queue, resa, grad_output.cl)
-    # print('RESA:', resa.sum(axis=0))
-
-    topk = 2
     # print('asdf:', ctx, ctx.cl_queue, ctx.cl_ctx, (weight.shape[0]))
     grad_input = buffer_new(ctx, weight.shape)
-    grad_weight = cl.Buffer(ctx.cl_ctx, cl.mem_flags.READ_WRITE, weight.shape[0]*topk*topk*4)
-
+    grad_weight = buffer_new(ctx, (topk*topk*weight.shape[0],))
+    # grad_weight = cl.Buffer(ctx.cl_ctx, cl.mem_flags.READ_WRITE, weight.shape[0]*topk*topk*4)
 
     # Grad update
     # (isize,osize) x (msize,osize) = (isize,msize)
     matmul(ctx.cl_queue, [weight.shape[0]], None,
       input.datat.cl, input.idxst.cl, input.nnzst.cl, np.uint32(input.ellwt), grad_output.cl, grad_input.cl)
 
-    resa = np.ones(weight.shape).astype(np.float32)
-    cl.enqueue_copy(ctx.cl_queue, resa, weight.data.cl)
-    print('x:', resa.shape)
-    resa = np.ones(weight.shape).astype(np.float32)
-    cl.enqueue_copy(ctx.cl_queue, resa, grad_output.cl)
-    print('y:', resa.shape)
+    # resa = np.ones(weight.shape).astype(np.float32)
+    # cl.enqueue_copy(ctx.cl_queue, resa, weight.data.cl)
+    # print('x:', resa.shape)
+    # resa = np.ones(weight.shape).astype(np.float32)
+    # cl.enqueue_copy(ctx.cl_queue, resa, weight.data.cl)
+    # print('y:', resa)
 
     # Weight update
-    x_idx_buf = buffer_new(ctx, (weight.shape[0], topk), dtype=np.uint32)
-    y_idx_buf = buffer_new(ctx, (weight.shape[0], topk), dtype=np.uint32)
+    x_idx_buf = buffer_new(ctx, (weight.shape[0], topk), dtype=np.uint32, zero=True)
+    y_idx_buf = buffer_new(ctx, (weight.shape[0], topk), dtype=np.uint32, zero=True)
 
     genwupdate2 = clbuild(ctx.cl_ctx, "genwupdate2", """
     // sorts x and y in ascending order and returns sorted indices
@@ -400,58 +395,73 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
                              __global  float* y,    // INPUT
                              __global  float* xout,    // INPUT
                              uint topk,
+                             uint bs,
                              __global  uint* xoutidx,    // INPUT
                              __global  uint* youtidx    // INPUT
                             ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
       uint n = get_global_size(0);
-      uint bs = get_global_size(1);
-      uint gid2 = get_global_id(1);
+      //uint bs = get_global_size(1);
+      //uint gid2 = get_global_id(1);
 
-      uint idx = n*gid2+gid;
+      for (uint gid2=0; gid2<bs; gid2++){
+        uint idx = n*gid2+gid;
 
-      float valx = x[idx];
-      float valy = y[idx];
-      uint posx = 0;
-      uint posy = 0;
-      for (uint i = 0; i < n; i++) {
-        uint idx2 = n*gid2+i;
-        float tempval = x[idx2];
-        float tempval2 = y[idx2];
-        bool larger = tempval > valx;
-        bool larger2 = tempval2 > valy;
+        float valx = x[idx];
+        float valy = y[idx];
+        uint posx = 0;
+        uint posy = 0;
+        for (uint i = 0; i < n; i++) {
+          uint idx2 = n*gid2+i;
+          float tempval = x[idx2];
+          float tempval2 = y[idx2];
+          bool larger = tempval > valx;
+          bool larger2 = tempval2 > valy;
 
-        posx += (larger)?1:0;
-        posy += (larger2)?1:0;
+          posx += (larger)?1:0;
+          posy += (larger2)?1:0;
+        }
+        //printf("posx:%i", posx);
+        if (posx < topk) {
+          xoutidx[posx+topk*gid2] = gid;
+          //printf("\\nxoutidx[%i]:%i", posx, gid);
+        }
+        if (posy < topk) {
+          youtidx[posy+topk*gid2] = gid;
+        }
       }
-      //printf("posx:%i", posx);
-      if (posx < topk) {
-        xoutidx[posx+topk*gid2] = gid;
-      }
-      if (posy < topk) {
-        youtidx[posy+topk*gid2] = gid;
-      }
-      if (gid < topk) {
-        for (uint j=0; j<topk; j++) {
-          float res = x[xoutidx[gid+topk*gid2]+gid2*n] * y[youtidx[j+topk*gid2]+gid2*n];
-          printf("\\nRES:%.2f - %i - %i -  %.2f - %.2f",res, xoutidx[gid]+topk*gid2, youtidx[j]+topk*gid2, x[xoutidx[gid]+n*gid2], y[youtidx[j]+n*gid2]);
-          xout[gid2*topk*topk+j*topk+gid] = res;
+      barrier(CLK_GLOBAL_MEM_FENCE);
+      for (uint gid2=0; gid2<bs; gid2++){
+        if (gid < topk) {
+          for (uint j=0; j<topk; j++) {
+            float res = x[xoutidx[gid+topk*gid2]+gid2*n] * y[youtidx[j+topk*gid2]+gid2*n];
+            //printf("\\nJ:%i  gid:%i idx:%i / %.2f", j, gid, xoutidx[gid+topk*gid2], y[youtidx[j+topk*gid2]+gid2*n]);
+            //printf("\\nRES:%.2f - %i - %i -  %.2f - %.2f",res, xoutidx[gid+topk*gid2], youtidx[j+topk*gid2], x[xoutidx[gid+topk*gid2]+gid2*n], y[youtidx[j+topk*gid2]+gid2*n]);
+            //barrier(CLK_GLOBAL_MEM_FENCE);
+            xout[gid2*topk*topk+j*topk+gid] = res;
+          }
         }
       }
     }""")
 
     # weight: bs x rows
 
-    print('GRTRTS:', weight.shape, grad_output.shape, topk)
-    genwupdate2(ctx.cl_queue, (weight.shape[1],weight.shape[0]), None,
-      weight.data.cl, grad_output.cl, grad_weight, np.uint32(topk), x_idx_buf.cl, y_idx_buf.cl)
+    # print('GRTRTS:', weight.shape, grad_output.shape, topk)
+    genwupdate2(ctx.cl_queue, [weight.shape[1]], None,
+      weight.data.cl, grad_output.cl, grad_weight.cl, np.uint32(topk), np.uint32(weight.shape[0]), x_idx_buf.cl, y_idx_buf.cl)
 
     # gen alt data structure to add grad evetually in the optimizer
-    print("RAN")
+    # print("RAN")
 
-    resa = np.zeros((weight.shape[0],topk,topk)).astype(np.float32)
-    cl.enqueue_copy(ctx.cl_queue, resa, grad_weight)
-    print('GW0:', resa)
+    # bs = weight.shape[0]
+    # resx = np.zeros(bs*topk*topk).astype(np.float32)
+    # resxidx = np.zeros(bs*topk).astype(np.uint32)
+    # resyidx = np.zeros(bs*topk).astype(np.uint32)
+
+    # cl.enqueue_copy(ctx.cl_queue, resx, grad_weight.cl)
+    # cl.enqueue_copy(ctx.cl_queue, resxidx, x_idx_buf.cl)
+    # cl.enqueue_copy(ctx.cl_queue, resyidx, y_idx_buf.cl)
+    # print('GW0:', resx)
 
     return (grad_weight, x_idx_buf, y_idx_buf), grad_input
 

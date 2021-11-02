@@ -93,15 +93,23 @@ def reduce_op(ctx, code, code2, inp, axis=None, start="0.0"):
         }
       }
       float a = a_g[idx];
+      //if (get_global_size(0)==128)
+      //  printf("\\na: %.2f",a);
       """+code+""";
     }
     res_g[gid] = """+code2+""";
   }""")
-  reduce(ctx.cl_queue, [np.prod(osize)], None, inp.cl,
-    i32(np.prod(inp.shape)//np.prod(osize)), ret.cl,
-    i32(np.prod(osize)), i32(len(osize)),
-    buffer_np(ctx, np.array(inp.shape, dtype=np.int32)),
-    buffer_np(ctx, np.array(osize, dtype=np.int32)))
+  try:
+    gdim = np.prod(osize)
+    # print("RED GDIM:", gdim)
+    reduce(ctx.cl_queue, [gdim], None, inp.cl,
+      i32(np.prod(inp.shape)//np.prod(osize)), ret.cl,
+      i32(np.prod(osize)), i32(len(osize)),
+      buffer_np(ctx, np.array(inp.shape, dtype=np.int32)),
+      buffer_np(ctx, np.array(osize, dtype=np.int32)))
+  except Exception as e:
+    print(e)
+    print("GDIM:", gdim, osize, inp, ret)
   return ret
 
 class Sum(Function):
@@ -313,7 +321,7 @@ class Slice(Function):
 
 class Matmul(Function):
   def forward(ctx, input, weight):
-    print("WEGHT:", weight.shape)
+    # print("WEGHT:", weight.shape)
     assert input.shape[-1] == weight.shape[-2]
     cnt = np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])

@@ -7,6 +7,8 @@ import numpy as np
 from .tensor import Device, Tensor
 from .densetensor import DenseTensor, GPUBuffer, require_init_gpu, cl_ctx, cl_queue, ane
 
+topk = 1
+
 require_init_gpu()
 
 # **** profiler ****
@@ -59,6 +61,7 @@ class SparseTensor(Tensor):
     else:
       self.shape = randinit
       data, idxs, nnzs, ellw, datat, idxst, nnzst, ellwt = self.make_random(randinit, sparsity=randsparsity)
+      # print('data:', data)
       # datat, idxst, nnzst, ellwt = self.make_random(randinit)
 
     if len(data)==0:
@@ -81,15 +84,13 @@ class SparseTensor(Tensor):
     self.nnzst = self._move_data(nnzst, device, np.uint32)
     self.ellwt = ellwt
 
-
-
     self.grad, self.requires_grad = None, requires_grad
 
     # internal variables used for autograd graph construction
     self._ctx = None
 
   def __repr__(self):
-    return f"<SparseTensor {self.data!r} with grad {(self.grad.data if self.grad else None)!r}>"
+    return f"<SparseTensor {self.data!r} with grad {(self.grad if self.grad else None)!r}>"
 
   def assign(self, x):
     self.data = x.data
@@ -136,7 +137,7 @@ class SparseTensor(Tensor):
     all_nnzs = np.array(all_nnzs).astype(np.uint32)
     return all_rows, all_idxs, all_nnzs, ellwidth
 
-  def make_random(self, shape, sparsity=0.9):
+  def make_random(self, shape, sparsity=0.7):
     all_rows = []
     all_idxs = []
     all_nnzs = []
@@ -145,7 +146,7 @@ class SparseTensor(Tensor):
     ellwidth = min(ellwidth, shape[1])
     cols = {}
     for row in range(shape[0]):
-      rowdata = np.random.rand(nnzs) / (nnzs*nnzs)
+      rowdata = np.random.rand(nnzs) #/ (nnzs)
       rowidx = np.random.permutation(shape[1])[:nnzs]
       i = 0
       for col in rowidx:
@@ -265,8 +266,9 @@ class SparseTensor(Tensor):
   def updategrad(self, grad, lr):
     # Weight update
     ctx = self._ctx
+    bs = grad[1].shape[0]
 
-    # topk = 4
+    # print("GRAD:", )
     # resa = np.ones(topk*topk).astype(np.float32)
     # cl.enqueue_copy(ctx.cl_queue, resa, grad[0].cl)
     # print('RESA:', resa)
@@ -285,28 +287,33 @@ class SparseTensor(Tensor):
                          __global  uint* updateyidx
                          ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
-      uint n = get_global_size(0);
-      uint row = updateyidx[gid];
+      uint gid2 = get_global_id(1);
+      uint topk = get_global_size(0);
+      uint bs = get_global_size(1);
+      uint baseupdateidx = topk*topk*gid2;
+      uint baseidxidx = topk*gid2;
+      uint row = updateyidx[baseidxidx+gid];
 
-      for (uint i=0; i<n; i++) {
-        float val = updatevals[gid*n+i];
-        uint col = updatexidx[i];
+      for (uint i=0; i<topk; i++) {
+        float val = updatevals[baseupdateidx+gid*topk+i];
+        uint col = updatexidx[baseidxidx+i];
         for (uint i=0; i<rowNnz[row]; i++) {
-          uint idx = gid*ellwidth+i;
+          uint idx = row*ellwidth+i;
           if (colIdx[idx] >= col) {
+            //printf("\\nFOUND:%i/%i  - idx:%i", colIdx[idx], col, idx);
             if (colIdx[idx] == col) {
-              matData[idx] += val*lr;
-              //printf("\\nUPDATE[%i]: %f", idx, val);
+              matData[idx] -= val*lr;
+              //printf("\\nUPDATE[%i,%i]: %f", row,col, val);
               break;
             } else {
               // insert new column
-              //printf("\\nINSERT[%i]: %.2f", idx, val);
+              //printf("\\nINSERT[%i,%i]: %.2f", row,col, val);
               for (uint j=rowNnz[row]+1; j>i; j--) {
-                uint idx2 = gid*ellwidth+j;
+                uint idx2 = row*ellwidth+j;
                 matData[idx2] = matData[idx2-1];
                 colIdx[idx2] = colIdx[idx2-1];
               }
-              matData[idx] = val*lr;
+              matData[idx] = -val*lr;
               colIdx[idx] = col;
               rowNnz[row] += 1;
               break;
@@ -324,10 +331,9 @@ class SparseTensor(Tensor):
     # print('RESA2:', resa)
 
     # (isize,msize) x (isize,osize) = (msize,osize)
-    topk = 4
     # print('grad:', grad)
-    addvals(ctx.cl_queue, [topk], None,
-      self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw), grad[0].cl, grad[1], grad[2])
+    addvals(ctx.cl_queue, [topk,bs], None,
+      self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw), grad[0].cl, grad[1].cl, grad[2].cl)
 
     addvals2 = cl.Program(ctx.cl_ctx,
      """
@@ -342,28 +348,33 @@ class SparseTensor(Tensor):
                          __global  uint* updateyidx
                          ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
-      uint n = get_global_size(0);
-      uint col = updateyidx[gid];
+      uint gid2 = get_global_id(1);
+      uint topk = get_global_size(0);
+      uint bs = get_global_size(1);
+      uint baseupdateidx = topk*topk*gid2;
+      uint baseidxidx = topk*gid2;
+      uint row = updatexidx[baseidxidx+gid];
 
-      for (uint i=0; i<n; i++) {
-        float val = updatevals[gid*n+i];
-        uint row = updatexidx[i];
+      for (uint i=0; i<topk; i++) {
+        float val = updatevals[baseupdateidx+gid*topk+i];
+        uint col = updateyidx[baseidxidx+i];
         for (uint i=0; i<rowNnz[row]; i++) {
-          uint idx = gid*ellwidth+i;
+          uint idx = row*ellwidth+i;
           if (colIdx[idx] >= col) {
+            //printf("\\nFOUND:%i/%i  - idx:%i", colIdx[idx], col, idx);
             if (colIdx[idx] == col) {
-              matData[idx] += val*lr;
-              //printf("\\nUPDATE2[%i]: %.2f", idx, val);
+              matData[idx] -= val*lr;
+              //printf("\\nUPDATE[%i,%i]: %f", row,col, val);
               break;
             } else {
               // insert new column
-              //printf("\\nINSERT2[%i]: %.2f", idx, val);
+              //printf("\\nINSERT[%i,%i]: %.2f", row,col, val);
               for (uint j=rowNnz[row]+1; j>i; j--) {
-                uint idx2 = gid*ellwidth+j;
+                uint idx2 = row*ellwidth+j;
                 matData[idx2] = matData[idx2-1];
                 colIdx[idx2] = colIdx[idx2-1];
               }
-              matData[idx] = val*lr;
+              matData[idx] = -val*lr;
               colIdx[idx] = col;
               rowNnz[row] += 1;
               break;
@@ -377,10 +388,9 @@ class SparseTensor(Tensor):
     }""").build().__getattr__('addvals2')
 
     # (isize,msize) x (isize,osize) = (msize,osize)
-    topk = 4
     # print('grad:', grad)
-    addvals2(ctx.cl_queue, [topk], None,
-      self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(lr), np.uint32(self.ellwt), grad[0].cl, grad[1], grad[2])
+    addvals2(ctx.cl_queue, [topk,bs], None,
+      self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(lr), np.uint32(self.ellwt), grad[0].cl, grad[1].cl, grad[2].cl)
     self._ctx = None
 
   def to_(self, device):

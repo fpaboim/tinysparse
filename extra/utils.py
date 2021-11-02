@@ -1,4 +1,5 @@
-from tinygrad.tensor import Tensor
+from tinygrad.densetensor import DenseTensor
+from tinygrad.sparsetensor import SparseTensor
 import tinygrad.nn as nn
 import pickle
 import numpy as np
@@ -19,7 +20,10 @@ def fetch(url):
 
 def get_parameters(obj):
   parameters = []
-  if isinstance(obj, Tensor):
+  # print("OBJ:", obj)
+  if isinstance(obj, DenseTensor):
+    parameters.append(obj)
+  if isinstance(obj, SparseTensor):
     parameters.append(obj)
   elif isinstance(obj, list):
     for x in obj:

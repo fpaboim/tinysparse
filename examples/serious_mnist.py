@@ -177,7 +177,9 @@ if __name__ == "__main__":
     optimizer = optim.Adam(model.parameters(), lr=lr)
     for epoch in range(1,epochs+1):
       #first epoch without augmentation
-      X_aug = X_train if epoch == 1 else augment_img(X_train)
+      X_aug = X_train #if epoch == 1 else augment_img(X_train)
+      X_aug = X_aug / 255
       train(model, X_aug, Y_train, optimizer, steps=steps, lossfn=lossfn, BS=BS)
+      X_test = X_test / 255
       accuracy = evaluate(model, X_test, Y_test, BS=BS)
-      model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')
+      # model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')
