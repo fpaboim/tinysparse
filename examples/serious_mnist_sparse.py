@@ -22,88 +22,6 @@ GPU = True
 if GPU:
   print("** USING GPU **")
 
-class SqueezeExciteBlock2D:
-  def __init__(self, filters):
-    self.filters = filters
-    self.weight1 = DenseTensor.uniform(self.filters, self.filters//32)
-    self.bias1 = DenseTensor.uniform(1,self.filters//32)
-    self.weight2 = DenseTensor.uniform(self.filters//32, self.filters)
-    self.bias2 = DenseTensor.uniform(1, self.filters)
-
-  def __call__(self, input):
-    se = input.avg_pool2d(kernel_size=(input.shape[2], input.shape[3])) #GlobalAveragePool2D
-    se = se.reshape(shape=(-1, self.filters))
-    se = se.dot(self.weight1) + self.bias1
-    se = se.relu()
-    se = se.dot(self.weight2) + self.bias2
-    se = se.sigmoid().reshape(shape=(-1,self.filters,1,1)) #for broadcasting
-    se = input.mul(se)
-    return se
-
-class ConvBlock:
-  def __init__(self, h, w, inp, filters=128, conv=3):
-    self.h, self.w = h, w
-    self.inp = inp
-    #init weights
-    self.cweights = [DenseTensor.uniform(filters, inp if i==0 else filters, conv, conv) for i in range(3)]
-    self.cbiases = [DenseTensor.uniform(1, filters, 1, 1) for i in range(3)]
-    #init layers
-    self._bn = BatchNorm2D(128, training=True)
-    self._seb = SqueezeExciteBlock2D(filters)
-
-  def __call__(self, input):
-    x = input.reshape(shape=(-1, self.inp, self.w, self.h))
-    for cweight, cbias in zip(self.cweights, self.cbiases):
-      x = x.pad2d(padding=[1,1,1,1]).conv2d(cweight).add(cbias).relu()
-    x = self._bn(x)
-    x = self._seb(x)
-    return x
-
-class BigConvNet:
-  def __init__(self):
-    self.conv = [ConvBlock(28,28,1), ConvBlock(28,28,128), ConvBlock(14,14,128)]
-    self.weight1 = DenseTensor.uniform(128,10)
-    self.weight2 = DenseTensor.uniform(128,10)
-
-  def parameters(self):
-    if DEBUG: #keeping this for a moment
-      pars = [par for par in get_parameters(self) if par.requires_grad]
-      no_pars = 0
-      for par in pars:
-        print(par.shape)
-        no_pars += np.prod(par.shape)
-      print('no of parameters', no_pars)
-      return pars
-    else:
-      return get_parameters(self)
-
-  def save(self, filename):
-    with open(filename+'.npy', 'wb') as f:
-      for par in get_parameters(self):
-        #if par.requires_grad:
-        np.save(f, par.cpu().data)
-
-  def load(self, filename):
-    with open(filename+'.npy', 'rb') as f:
-      for par in get_parameters(self):
-        #if par.requires_grad:
-        try:
-          par.cpu().data[:] = np.load(f)
-          if GPU:
-            par.gpu()
-        except:
-          print('Could not load parameter')
-
-  def forward(self, x):
-    x = self.conv[0](x)
-    x = self.conv[1](x)
-    x = x.avg_pool2d(kernel_size=(2,2))
-    x = self.conv[2](x)
-    x1 = x.avg_pool2d(kernel_size=(14,14)).reshape(shape=(-1,128)) #global
-    x2 = x.max_pool2d(kernel_size=(14,14)).reshape(shape=(-1,128)) #global
-    xo = x1.dot(self.weight1) + x2.dot(self.weight2)
-    return xo.logsoftmax()
-
 class MLP:
   def __init__(self):
     # self.weight1 = DenseTensor.uniform(784,32)
@@ -150,7 +68,7 @@ class MLP:
 if __name__ == "__main__":
   # lrs = [1e-4, 1e-5] if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
   # epochss = [2, 1] if QUICK else [13, 3, 3, 1]
-  BS = 128
+  BS = 4
 
   lmbd = 0.00025
   lossfn = lambda out,y: sparse_categorical_crossentropy(out, y) #+ lmbd*(model.weight1.abs() + model.weight2.abs()).sum().cpu().data
@@ -176,12 +94,14 @@ if __name__ == "__main__":
     params = get_parameters(model)
     [x.gpu_() for x in params]
 
-  lr = 0.1
+  lr = 100
   epochs = 100
   optimizer = optim.SGD(model.parameters(), lr=lr)
   for epoch in range(1,epochs+1):
     #first epoch without augmentation
     # X_aug = X_train if epoch == 1 else augment_img(X_train)
+    X_train = X_train / 255
     train(model, X_train, Y_train, optimizer, steps=steps, lossfn=lossfn, BS=BS)
+    X_test = X_test / 255
     accuracy = evaluate(model, X_test, Y_test, BS=BS)
-    model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')
+    # model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')

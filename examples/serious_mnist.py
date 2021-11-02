@@ -105,8 +105,8 @@ class BigConvNet:
 
 class MLP:
   def __init__(self):
-    # self.weight1 = DenseTensor.uniform(784,32)
-    self.weight1 = SparseTensor.uniform(784,784)
+    self.weight1 = DenseTensor.uniform(784,32)
+    # self.weight1 = SparseTensor.uniform(784,784)
     self.weight2 = DenseTensor.uniform(32,10)
 
   def parameters(self):

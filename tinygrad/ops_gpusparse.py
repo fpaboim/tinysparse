@@ -314,13 +314,15 @@ class Slice(SparseFunction):
 
 class Matmul(SparseFunction): # input and weights are swapped, legacy..
   def forward(ctx, input, weight):
+    print("WEGHT:", weight.shape)
+    BS = weight.shape[0]
     # print('sprmult:', input, weight)
     # assert input.shape[-1] == weight.shape[-2]
     # cnt = 1#np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
     # isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
-    # print(weight.shape)
-    ret = buffer_new(ctx.cl_ctx, weight.shape)
-    # print("RET:", ret.cl)
+    ret = buffer_new(ctx.cl_ctx, weight.shape, zero=True)
+    # print("RET:", ret)
+    # print("RET:", weight)
 
     matmul = clbuild(ctx.cl_ctx, "matmul", """
     // Every global_id_0 works on a row
@@ -332,41 +334,48 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
                             __global  float* vector_y    // OUTPUT
                             ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
+      uint nrows = get_global_size(0);
+      uint gid2 = get_global_id(1);
+
       uint nnz    = rowNnz[gid];
+      uint baseidx = gid2*nrows;
       float sum = 0;
       for (uint i = 0; i < nnz; i++) {
-        uint index   = gid * ellwidth + i;
+        uint index   = (gid * ellwidth) + i;
         uint col     = colIdx[index];
         float aval  = matData[index];
-        float xval  = vector_x[col];
-        //printf("aval, xval: %.2f,%.2f:%i-%i \\n", aval, xval, col, index);
+        float xval  = vector_x[baseidx+col];
+        //printf("aval, xval: %.2f,%.2f: (%i,%i) \\n", aval, xval, col, index);
         sum  += aval * xval;
       }
       //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
-      vector_y[gid] = sum;
+      vector_y[baseidx+gid] = sum;
     }""")
     ctx.save_for_backward(input, weight, matmul)
 
     # (isize,msize) x (msize,osize) = (isize,osize)
-    matmul(ctx.cl_queue, [weight.shape[0]], None,
+    matmul(ctx.cl_queue, [weight.shape[1], weight.shape[0]], None,
       input.data.cl, input.idxs.cl, input.nnzs.cl, np.uint32(input.ellw), weight.data.cl, ret.cl)
 
-    resa = np.ones(weight.shape[0]).astype(np.float32)
+    resa = np.zeros(weight.shape).astype(np.float32)
     cl.enqueue_copy(ctx.cl_queue, resa, ret.cl)
-    print('RET:', resa)
+    # print("RES:", resa)
+
+    # print("LEN:", weight)
+    # print('IN:', resa)
     return ret
 
   def backward(ctx, grad_output):
     input, weight, matmul = ctx.saved_tensors
 
-    resa = np.ones(weight.shape[0]).astype(np.float32)
-    cl.enqueue_copy(ctx.cl_queue, resa, grad_output.cl)
-    print('RESA:', resa)
+    # resa = np.zeros(weight.shape).astype(np.float32)
+    # cl.enqueue_copy(ctx.cl_queue, resa, grad_output.cl)
+    # print('RESA:', resa.sum(axis=0))
 
-    topk = 4
+    topk = 2
     # print('asdf:', ctx, ctx.cl_queue, ctx.cl_ctx, (weight.shape[0]))
-    grad_input = buffer_new(ctx, (weight.shape))
-    grad_weight = buffer_new(ctx, (topk**2,))
+    grad_input = buffer_new(ctx, weight.shape)
+    grad_weight = cl.Buffer(ctx.cl_ctx, cl.mem_flags.READ_WRITE, weight.shape[0]*topk*topk*4)
 
 
     # Grad update
@@ -374,9 +383,17 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     matmul(ctx.cl_queue, [weight.shape[0]], None,
       input.datat.cl, input.idxst.cl, input.nnzst.cl, np.uint32(input.ellwt), grad_output.cl, grad_input.cl)
 
+    resa = np.ones(weight.shape).astype(np.float32)
+    cl.enqueue_copy(ctx.cl_queue, resa, weight.data.cl)
+    print('x:', resa.shape)
+    resa = np.ones(weight.shape).astype(np.float32)
+    cl.enqueue_copy(ctx.cl_queue, resa, grad_output.cl)
+    print('y:', resa.shape)
+
     # Weight update
-    x_idx_buf = cl.Buffer(ctx.cl_ctx, cl.mem_flags.WRITE_ONLY, 4*topk)
-    y_idx_buf = cl.Buffer(ctx.cl_ctx, cl.mem_flags.WRITE_ONLY, 4*topk)
+    x_idx_buf = buffer_new(ctx, (weight.shape[0], topk), dtype=np.uint32)
+    y_idx_buf = buffer_new(ctx, (weight.shape[0], topk), dtype=np.uint32)
+
     genwupdate2 = clbuild(ctx.cl_ctx, "genwupdate2", """
     // sorts x and y in ascending order and returns sorted indices
     __kernel void genwupdate2(__global  float* x,     // INPUT MATRIX DATA
@@ -388,25 +405,19 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
                             ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
       uint n = get_global_size(0);
+      uint bs = get_global_size(1);
+      uint gid2 = get_global_id(1);
 
-      if (gid == 0) {
-        for (int i=0; i<n; i++) {
-          if (y[i] > 0)
-            printf("\\nx[%i]:%.2f", i, y[i]);
-        }
-      }
+      uint idx = n*gid2+gid;
 
-      xout[gid] = x[gid];
-      xoutidx[gid] = gid;
-      youtidx[gid] = gid;
-
-      float valx = x[gid];
-      float valy = y[gid];
+      float valx = x[idx];
+      float valy = y[idx];
       uint posx = 0;
       uint posy = 0;
       for (uint i = 0; i < n; i++) {
-        float tempval = x[i];
-        float tempval2 = y[i];
+        uint idx2 = n*gid2+i;
+        float tempval = x[idx2];
+        float tempval2 = y[idx2];
         bool larger = tempval > valx;
         bool larger2 = tempval2 > valy;
 
@@ -415,26 +426,32 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       }
       //printf("posx:%i", posx);
       if (posx < topk) {
-        xoutidx[posx] = gid;
+        xoutidx[posx+topk*gid2] = gid;
       }
       if (posy < topk) {
-        youtidx[posy] = gid;
+        youtidx[posy+topk*gid2] = gid;
       }
       if (gid < topk) {
-        uint i = gid;
         for (uint j=0; j<topk; j++) {
-          float res = x[xoutidx[gid]] * y[youtidx[j]];
-          //printf("\\nRES:%.2f - %i - %i -  %.2f - %.2f",res, xoutidx[gid], youtidx[j], x[xoutidx[gid]], y[youtidx[j]]);
-          xout[gid*topk+j] = res;
+          float res = x[xoutidx[gid+topk*gid2]+gid2*n] * y[youtidx[j+topk*gid2]+gid2*n];
+          printf("\\nRES:%.2f - %i - %i -  %.2f - %.2f",res, xoutidx[gid]+topk*gid2, youtidx[j]+topk*gid2, x[xoutidx[gid]+n*gid2], y[youtidx[j]+n*gid2]);
+          xout[gid2*topk*topk+j*topk+gid] = res;
         }
       }
     }""")
 
-    # (isize,msize) x (isize,osize) = (msize,osize)
-    genwupdate2(ctx.cl_queue, [weight.shape[0]], None,
-      weight.data.cl, grad_output.cl, grad_weight.cl, np.uint32(topk), x_idx_buf, y_idx_buf)
+    # weight: bs x rows
+
+    print('GRTRTS:', weight.shape, grad_output.shape, topk)
+    genwupdate2(ctx.cl_queue, (weight.shape[1],weight.shape[0]), None,
+      weight.data.cl, grad_output.cl, grad_weight, np.uint32(topk), x_idx_buf.cl, y_idx_buf.cl)
 
     # gen alt data structure to add grad evetually in the optimizer
+    print("RAN")
+
+    resa = np.zeros((weight.shape[0],topk,topk)).astype(np.float32)
+    cl.enqueue_copy(ctx.cl_queue, resa, grad_weight)
+    print('GW0:', resa)
 
     return (grad_weight, x_idx_buf, y_idx_buf), grad_input
 

@@ -313,6 +313,7 @@ class Slice(Function):
 
 class Matmul(Function):
   def forward(ctx, input, weight):
+    print("WEGHT:", weight.shape)
     assert input.shape[-1] == weight.shape[-2]
     cnt = np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
@@ -342,6 +343,8 @@ class Matmul(Function):
     matmul(ctx.cl_queue, [isize, osize, cnt], None,
       input.cl, weight.cl, ret.cl, isize,
       msize, i32(1), msize, i32(1), osize, osize)
+
+    # print('RET:', ret)
     return ret
 
   def backward(ctx, grad_output):
