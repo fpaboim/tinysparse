@@ -105,9 +105,10 @@ class BigConvNet:
 
 class MLP:
   def __init__(self):
-    self.weight1 = DenseTensor.uniform(784,32)
+    self.weight1 = DenseTensor.uniform(784,784)
     # self.weight1 = SparseTensor.uniform(784,784)
-    self.weight2 = DenseTensor.uniform(32,10)
+    self.weight2 = DenseTensor.uniform(784,10)
+    self.weight2
 
   def parameters(self):
     if DEBUG: #keeping this for a moment
@@ -172,8 +173,9 @@ if __name__ == "__main__":
   if GPU:
     params = get_parameters(model)
     [x.gpu_() for x in params]
+  lr = 0.001
 
-  for lr, epochs in zip(lrs, epochss):
+  for epochs in epochss:
     optimizer = optim.Adam(model.parameters(), lr=lr)
     for epoch in range(1,epochs+1):
       #first epoch without augmentation

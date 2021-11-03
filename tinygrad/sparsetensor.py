@@ -146,7 +146,7 @@ class SparseTensor(Tensor):
     ellwidth = min(ellwidth, shape[1])
     cols = {}
     for row in range(shape[0]):
-      rowdata = np.random.rand(nnzs) #/ (nnzs)
+      rowdata = np.random.rand(nnzs) / 4#/ (nnzs)
       rowidx = np.random.permutation(shape[1])[:nnzs]
       i = 0
       for col in rowidx:
@@ -292,17 +292,17 @@ class SparseTensor(Tensor):
       uint bs = get_global_size(1);
       uint baseupdateidx = topk*topk*gid2;
       uint baseidxidx = topk*gid2;
-      uint row = updateyidx[baseidxidx+gid];
+      uint col = updateyidx[baseidxidx+gid];
 
       for (uint i=0; i<topk; i++) {
         float val = updatevals[baseupdateidx+gid*topk+i];
-        uint col = updatexidx[baseidxidx+i];
+        uint row = updatexidx[baseidxidx+i];
         for (uint i=0; i<rowNnz[row]; i++) {
           uint idx = row*ellwidth+i;
           if (colIdx[idx] >= col) {
             //printf("\\nFOUND:%i/%i  - idx:%i", colIdx[idx], col, idx);
             if (colIdx[idx] == col) {
-              matData[idx] -= val*lr;
+              matData[idx] += -val*lr;
               //printf("\\nUPDATE[%i,%i]: %f", row,col, val);
               break;
             } else {
@@ -353,17 +353,17 @@ class SparseTensor(Tensor):
       uint bs = get_global_size(1);
       uint baseupdateidx = topk*topk*gid2;
       uint baseidxidx = topk*gid2;
-      uint row = updatexidx[baseidxidx+gid];
+      uint row = updateyidx[baseidxidx+gid];
 
       for (uint i=0; i<topk; i++) {
         float val = updatevals[baseupdateidx+gid*topk+i];
-        uint col = updateyidx[baseidxidx+i];
+        uint col = updatexidx[baseidxidx+i];
         for (uint i=0; i<rowNnz[row]; i++) {
           uint idx = row*ellwidth+i;
           if (colIdx[idx] >= col) {
             //printf("\\nFOUND:%i/%i  - idx:%i", colIdx[idx], col, idx);
             if (colIdx[idx] == col) {
-              matData[idx] -= val*lr;
+              matData[idx] += -val*lr;
               //printf("\\nUPDATE[%i,%i]: %f", row,col, val);
               break;
             } else {

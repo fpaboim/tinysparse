@@ -20,7 +20,7 @@ def sparse_categorical_crossentropy(out, Y):
 
 def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
         transform=lambda x: x, target_transform=lambda x: x):
-  DenseTensor.training = True
+  DenseTensor.training = False
   SparseTensor.training = True
   losses, accuracies = [], []
   for i in (t := trange(steps, disable=os.getenv('CI') is not None)):

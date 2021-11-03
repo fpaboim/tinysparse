@@ -13,6 +13,8 @@ class SGD(Optimizer):
   def __init__(self, params, lr=0.001):
     super().__init__(params)
     self.lr = lr
+    self.factor = 0.99
+    self.decay = 1*self.factor
 
   def step(self):
     for t in self.params:
@@ -20,6 +22,7 @@ class SGD(Optimizer):
       if t.is_sparse():
         t.updategrad(t.grad, self.lr)
       else:
+        self.decay = self.decay * self.factor
         t -= t.grad * self.lr
 
 class RMSprop(Optimizer):
