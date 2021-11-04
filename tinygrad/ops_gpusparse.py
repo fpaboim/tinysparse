@@ -314,13 +314,14 @@ class Slice(SparseFunction):
 
 class Matmul(SparseFunction): # input and weights are swapped, legacy..
   def forward(ctx, input, weight):
-    # print("WEGHT:", input, weight.shape)
+    # print("WEGHT:", input.shape, weight.shape)
     BS = weight.shape[0]
     # print('sprmult:', input, weight)
     # assert input.shape[-1] == weight.shape[-2]
     # cnt = 1#np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
     # isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
-    ret = buffer_new(ctx.cl_ctx, weight.shape, zero=True)
+    outshape = (BS, input.shape[0])
+    ret = buffer_new(ctx.cl_ctx, outshape, zero=True)
     # print("RET:", ret)
     # print("RET:", weight)
 
@@ -354,7 +355,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     ctx.save_for_backward(input, weight, matmul)
 
     # (isize,msize) x (msize,osize) = (isize,osize)
-    matmul(ctx.cl_queue, [weight.shape[1], weight.shape[0]], None,
+    matmul(ctx.cl_queue, [input.shape[0], weight.shape[0]], None,
       input.data.cl, input.idxs.cl, input.nnzs.cl, np.uint32(input.ellw), weight.data.cl, ret.cl)
 
     # resa = np.zeros(weight.shape).astype(np.float32)
@@ -363,10 +364,12 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
 
     # print("LEN:", weight)
     # print('IN:', resa)
+    # print("RET:", ret)
     return ret
 
   def backward(ctx, grad_output):
     input, weight, matmul = ctx.saved_tensors
+    # print("BACK:", input.shape, weight.shape)
 
     # print('asdf:', ctx, ctx.cl_queue, ctx.cl_ctx, (weight.shape[0]))
     grad_input = buffer_new(ctx, weight.shape)
@@ -375,7 +378,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
 
     # Grad update
     # (isize,osize) x (msize,osize) = (isize,msize)
-    matmul(ctx.cl_queue, [weight.shape[0]], None,
+    matmul(ctx.cl_queue, [input.shape[0], weight.shape[0]], None,
       input.datat.cl, input.idxst.cl, input.nnzst.cl, np.uint32(input.ellwt), grad_output.cl, grad_input.cl)
 
     # resa = np.ones(weight.shape).astype(np.float32)

@@ -176,7 +176,7 @@ if __name__ == "__main__":
   lr = 0.001
 
   for epochs in epochss:
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.RMSprop(model.parameters(), lr=lr)
     for epoch in range(1,epochs+1):
       #first epoch without augmentation
       X_aug = X_train #if epoch == 1 else augment_img(X_train)

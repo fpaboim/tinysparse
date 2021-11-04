@@ -47,7 +47,7 @@ class SparseTensor(Tensor):
   ops = defaultdict(dict)
 
   def __init__(self, dense_data=[], data=[], idxs=[], nnzs=[], ellw=None,
-               shape=None, randinit=[], randsparsity=0.9, device=DEFAULT_DEVICE, requires_grad=True):
+               shape=None, randinit=[], randsparsity=0.9, bs=32, device=DEFAULT_DEVICE, requires_grad=True):
     self.device = device
     # print('rand:', randinit)
 
@@ -60,7 +60,7 @@ class SparseTensor(Tensor):
       datat, idxst, nnzst, ellwt = self.to_ell(dense_data.T)
     else:
       self.shape = randinit
-      data, idxs, nnzs, ellw, datat, idxst, nnzst, ellwt = self.make_random(randinit, sparsity=randsparsity)
+      data, idxs, nnzs, ellw, datat, idxst, nnzst, ellwt = self.make_random(randinit, sparsity=randsparsity, bs=bs)
       # print('data:', data)
       # datat, idxst, nnzst, ellwt = self.make_random(randinit)
 
@@ -84,7 +84,7 @@ class SparseTensor(Tensor):
     self.nnzst = self._move_data(nnzst, device, np.uint32)
     self.ellwt = ellwt
 
-    self.grad, self.requires_grad = None, requires_grad
+    self.grad, self.lastgrad, self.requires_grad = None, None, requires_grad
 
     # internal variables used for autograd graph construction
     self._ctx = None
@@ -137,18 +137,23 @@ class SparseTensor(Tensor):
     all_nnzs = np.array(all_nnzs).astype(np.uint32)
     return all_rows, all_idxs, all_nnzs, ellwidth
 
-  def make_random(self, shape, sparsity=0.7):
+  def make_random(self, shape, sparsity=0.7, bs=32):
     all_rows = []
     all_idxs = []
     all_nnzs = []
-    nnzs = int(shape[1]*(1-sparsity))
+    nnzs = int(shape[1]*(1-sparsity))+1
     ellwidth = int((nnzs/2)+1)*4
     ellwidth = min(ellwidth, shape[1])
     cols = {}
     for row in range(shape[0]):
-      rowdata = np.random.rand(nnzs) / 4#/ (nnzs)
+      rowdata = np.random.rand(nnzs) / (shape[1])#/ (nnzs)
       rowidx = np.random.permutation(shape[1])[:nnzs]
       i = 0
+
+      if not row in rowidx:
+        cols[-1] = row
+        rowdata[-1] = 1
+
       for col in rowidx:
         if not col in cols.keys():
           cols[col] = [(rowdata[i],row)]
@@ -302,7 +307,7 @@ class SparseTensor(Tensor):
           if (colIdx[idx] >= col) {
             //printf("\\nFOUND:%i/%i  - idx:%i", colIdx[idx], col, idx);
             if (colIdx[idx] == col) {
-              matData[idx] += -val*lr;
+              matData[idx] += -(val*lr)/bs;
               //printf("\\nUPDATE[%i,%i]: %f", row,col, val);
               break;
             } else {
@@ -313,7 +318,7 @@ class SparseTensor(Tensor):
                 matData[idx2] = matData[idx2-1];
                 colIdx[idx2] = colIdx[idx2-1];
               }
-              matData[idx] = -val*lr;
+              matData[idx] = -((val*lr)/bs);
               colIdx[idx] = col;
               rowNnz[row] += 1;
               break;

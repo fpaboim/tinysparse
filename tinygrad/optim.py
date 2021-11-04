@@ -13,7 +13,7 @@ class SGD(Optimizer):
   def __init__(self, params, lr=0.001):
     super().__init__(params)
     self.lr = lr
-    self.factor = 0.99
+    self.factor = 0.97
     self.decay = 1*self.factor
 
   def step(self):
