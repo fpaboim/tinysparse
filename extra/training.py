@@ -2,9 +2,7 @@ import os
 import numpy as np
 from tqdm import trange
 from extra.utils import get_parameters
-from tinygrad.tensor import Device
-from tinygrad.densetensor import DenseTensor, Device, GPU
-from tinygrad.sparsetensor import SparseTensor
+from tinygrad.densetensor import DenseTensor, GPU, Device
 
 def sparse_categorical_crossentropy(out, Y):
   num_classes = out.shape[-1]
@@ -14,23 +12,20 @@ def sparse_categorical_crossentropy(out, Y):
   y[range(y.shape[0]),YY] = -1.0*num_classes
   y = y.reshape(list(Y.shape)+[num_classes])
   y = DenseTensor(y)
-  out.gpu()
-  y.gpu()
   return out.mul(y).mean()
 
 def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
         transform=lambda x: x, target_transform=lambda x: x):
   DenseTensor.training = True
-  SparseTensor.training = True
   losses, accuracies = [], []
   for i in (t := trange(steps, disable=os.getenv('CI') is not None)):
     samp = np.random.randint(0, X_train.shape[0], size=(BS))
-    x = DenseTensor(transform(X_train[samp])).gpu()
+    x = DenseTensor(transform(X_train[samp]))
     y = target_transform(Y_train[samp])
 
     # network
     out = model.forward(x)
-    # print(out, y)
+
     loss = lossfn(out, y)
     optim.zero_grad()
     loss.backward()
@@ -43,12 +38,11 @@ def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categoric
     loss = loss.cpu().data
     losses.append(loss)
     accuracies.append(accuracy)
-    t.set_description("loss %.2f accuracy %.2f" % (loss, accuracy))
+    t.set_description("loss %.2f accuracy %.2f" % (loss+1, accuracy))
 
 def evaluate(model, X_test, Y_test, num_classes=None, BS=128, return_predict=False, transform=lambda x: x,
              target_transform=lambda y: y):
   DenseTensor.training = False
-  SparseTensor.training = False
   def numpy_eval(Y_test, num_classes):
     Y_test_preds_out = np.zeros(list(Y_test.shape)+[num_classes])
     for i in trange((len(Y_test)-1)//BS+1, disable=os.getenv('CI') is not None):
@@ -62,4 +56,3 @@ def evaluate(model, X_test, Y_test, num_classes=None, BS=128, return_predict=Fal
   acc, Y_test_pred = numpy_eval(Y_test, num_classes)
   print("test set accuracy is %f" % acc)
   return (acc, Y_test_pred) if return_predict else acc
-

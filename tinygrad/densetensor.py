@@ -148,10 +148,7 @@ class DenseTensor(Tensor):
       assert (t0.grad is not None)
       with ProfileOp(t0._ctx.__class__.__name__, [t0.grad], backward=True) as po:
         # print('t0:', t0, t0.grad.cpu().data)
-        try:
-          grads = t0._ctx.backward(t0._ctx, t0.grad.data)
-        except Exception as e:
-          print("EX:", e)
+        grads = t0._ctx.backward(t0._ctx, t0.grad.data)
       if len(t0._ctx.parents) == 1:
         grads = [grads]
       # print("PRT:", t0._ctx.parents)
@@ -160,18 +157,27 @@ class DenseTensor(Tensor):
         # print("T/g:",t,g)
         try:
           if t.is_sparse():
-            # print("SPARSE!",g)
             t._ctx = t0._ctx
-            gt = g#DenseTensor(g, device=self.device, requires_grad=False)
-            t.grad = gt if t.grad is None else (t.grad + gt)
-            continue
-        except Exception as e:
-          print("ERR:", e)
+        except:
           pass
+        #     # print("SPARSE!",g)
+        #     gt = g#DenseTensor(g, device=self.device, requires_grad=False)
+        #     t.grad = gt if t.grad is None else (t.grad + gt)
+        #     continue
+        # except Exception as e:
+        #   print("ERR:", e)
+        #   pass
         if g is not None:
+          # print('T/G:', t,g)
+          # if not isinstance(t, densetensor):
+          #   g = t.grad
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"
-          gt = DenseTensor(g, device=self.device, requires_grad=False)
+          if isinstance(g, DenseTensor):
+            gt = g
+          else:
+            gt = DenseTensor(g, device=self.device, requires_grad=False)
+          # print("SET GRAD:", gt)
           t.grad = gt if t.grad is None else (t.grad + gt)
 
   def detach(self):
@@ -231,6 +237,11 @@ class DenseTensor(Tensor):
     return self[:, :, -padding[2]:self.shape[2]+padding[3], -padding[0]:self.shape[3]+padding[1]]
 
   def dot(self, w):
+    if w.is_sparse():
+      xt = self.transpose()
+      wt = w.transpose()
+      # print("SPRSE MATMUL")
+      return wt.matmul(xt).transpose()
     return self.matmul(w)
 
   def mean(self, axis=None):
@@ -277,9 +288,9 @@ class DenseTensor(Tensor):
     return self - ss
 
   def dropout(self, p=0.5):
-    if Tensor.training:
+    if DenseTensor.training:
       _mask = np.asarray(np.random.binomial(1, 1.0-p, size=self.shape), dtype=self.dtype)
-      return self * Tensor(_mask, requires_grad=False, device=self.device) * (1/(1.0 - p))
+      return self * DenseTensor(_mask, requires_grad=False, device=self.device) * (1/(1.0 - p))
     else:
       return self
 
@@ -323,6 +334,7 @@ class Function:
     self.saved_tensors.extend(x)
 
   def apply(self, *x, **kwargs):
+    print("APPLY:", x, kwargs)
     ctx = self(*x) # self - operation i.e 'add', 'sub', etc.
     # use default params
     params = inspect.signature(self.forward).parameters
@@ -333,7 +345,9 @@ class Function:
     for k, v in kwargs.items():
       setattr(ctx, k, v)
     with ProfileOp(ctx.__class__.__name__, x) as po:
-      po.output = ret = DenseTensor(self.forward(ctx, *[t.data for t in x], **kwargs),
+      res = self.forward(ctx, *[t.data if 'DenseTensor' in t.__class__.__name__ else t for t in x], **kwargs)
+      # print("RES:", res)
+      po.output = ret = DenseTensor(res,
                    device=ctx.device, requires_grad=any([t.requires_grad for t in x]))
     if ret.requires_grad:
       ret._ctx = ctx
@@ -344,7 +358,20 @@ def register(name, fxn, device=Device.CPU):
   def dispatch(*x, **kwargs):
     #print('X:',x)
     tt = [arg for arg in x if isinstance(arg, DenseTensor)][0]
-    x = [DenseTensor(np.array([arg], dtype=tt.dtype), device=tt.device, requires_grad=False) if not isinstance(arg, DenseTensor) else arg for arg in x]
+    # x = [DenseTensor(np.array([arg], dtype=tt.dtype), device=tt.device, requires_grad=False) if not isinstance(arg, DenseTensor) else arg for arg in x]
+    xout = []
+    for arg in x:
+      if not isinstance(arg, DenseTensor):
+        if isinstance(arg, GPUBuffer):
+          xout.append(DenseTensor(arg, device=tt.device, requires_grad=False))
+        else:
+          if not 'Tensor' in arg.__class__.__name__:
+            xout.append(DenseTensor(np.array([arg], dtype=tt.dtype), device=tt.device, requires_grad=False))
+          else:
+            xout.append(arg)
+      else:
+        xout.append(arg)
+    x = xout
     #print('X2:',x,tt)
     f = DenseTensor.ops[tt.device][name]
     f.cl_ctx, f.cl_queue, f.ane, f.device = cl_ctx, cl_queue, ane, tt.device

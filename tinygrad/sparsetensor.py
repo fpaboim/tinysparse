@@ -46,33 +46,35 @@ class SparseTensor(Tensor):
   training = True
   ops = defaultdict(dict)
 
-  def __init__(self, dense_data=[], data=[], idxs=[], nnzs=[], ellw=None,
+  def __init__(self, dense_data=[], from_datas={}, idxs=[], nnzs=[], ellw=None,
                shape=None, randinit=[], randsparsity=0.9, bs=32, device=DEFAULT_DEVICE, requires_grad=True):
     self.device = device
-    # print('rand:', randinit)
 
     if len(randinit)==0:
-      if len(data)==0:
+      if len(from_datas.keys())==0:
         self.shape = dense_data.shape
+        data, idxs, nnzs, ellw = self.to_ell(dense_data)
+        datat, idxst, nnzst, ellwt = self.to_ell(dense_data.T)
       else:
+        assert(shape!=None)
         self.shape = shape
-      data, idxs, nnzs, ellw = self.to_ell(dense_data)
-      datat, idxst, nnzst, ellwt = self.to_ell(dense_data.T)
     else:
       self.shape = randinit
       data, idxs, nnzs, ellw, datat, idxst, nnzst, ellwt = self.make_random(randinit, sparsity=randsparsity, bs=bs)
       # print('data:', data)
       # datat, idxst, nnzst, ellwt = self.make_random(randinit)
 
-    if len(data)==0:
-      data, idxs, nnzs, ellw = self.to_ell(dense_data)
-      datat, idxst, nnzst, ellwt = self.to_ell(dense_data.T)
-      # data = np.expand_dims(data, 1)
-      # idxs = np.expand_dims(idxs, 1)
-      # nnzs = np.expand_dims(nnzs, 1)
-    # else:
-    #   print("HAS DATA:")
-    #   print(data, idxs, nnzs, ellw)
+
+    if len(from_datas.keys()) > 0:
+      data = self._move_data(from_datas['data'], device, np.float32)
+      idxs = self._move_data(from_datas['idxs'], device, np.uint32)
+      nnzs = self._move_data(from_datas['nnzs'], device, np.uint32)
+      ellw = from_datas['ellw']
+
+      datat = self._move_data(from_datas['datat'], device, np.float32)
+      idxst = self._move_data(from_datas['idxst'], device, np.uint32)
+      nnzst = self._move_data(from_datas['nnzst'], device, np.uint32)
+      ellwt = from_datas['ellwt']
 
     self.data = self._move_data(data, device, np.float32)
     self.idxs = self._move_data(idxs, device, np.uint32)
@@ -84,7 +86,7 @@ class SparseTensor(Tensor):
     self.nnzst = self._move_data(nnzst, device, np.uint32)
     self.ellwt = ellwt
 
-    self.grad, self.lastgrad, self.requires_grad = None, None, requires_grad
+    self.grad, self.requires_grad = None, requires_grad
 
     # internal variables used for autograd graph construction
     self._ctx = None
@@ -146,7 +148,7 @@ class SparseTensor(Tensor):
     ellwidth = min(ellwidth, shape[1])
     cols = {}
     for row in range(shape[0]):
-      rowdata = np.random.rand(nnzs) / (shape[1])#/ (nnzs)
+      rowdata = np.random.rand(nnzs) / int(sparsity*shape[1])#/ (nnzs)
       rowidx = np.random.permutation(shape[1])[:nnzs]
       i = 0
 
@@ -232,6 +234,7 @@ class SparseTensor(Tensor):
   # ***** tinygrad supports CPU and GPU *****
   @staticmethod
   def _move_data(data, device, dtype=np.float32):
+    # print("MOVE DATA", data)
     if isinstance(data, GPUBuffer):
       if device == Device.GPU: return data
       old = data
@@ -268,68 +271,65 @@ class SparseTensor(Tensor):
   def is_sparse(self):
     return True
 
+  def get_nnzs(self):
+    dim = (self.shape[0])
+    res= np.zeros(dim).astype(np.uint32)
+    cl.enqueue_copy(self._ctx.cl_queue, res, self.nnzs.cl)
+    print('RES:', res.sum())
+    return res.sum(axis=0)
+
   def updategrad(self, grad, lr):
+    # print("UPDATE GRAD", grad.cpu().data, lr)
     # Weight update
     ctx = self._ctx
     bs = grad[1].shape[0]
 
-    # print("GRAD:", )
-    # resa = np.ones(topk*topk).astype(np.float32)
-    # cl.enqueue_copy(ctx.cl_queue, resa, grad[0].cl)
-    # print('RESA:', resa)
-
-    # print('ctx:', ctx, self.data)
-    addvals = cl.Program(ctx.cl_ctx,
+    adddense = cl.Program(ctx.cl_ctx,
      """
     // Every global_id_0 works on a row
-    __kernel void addvals(__global  float* matData,     // INPUT MATRIX DATA
-                         __global  uint*  colIdx,
-                         __global  uint*  rowNnz,
-                         float lr,
-                         uint   ellwidth,
-                         __global  float* updatevals,    // INPUT
-                         __global  uint* updatexidx,
-                         __global  uint* updateyidx
-                         ) { // LOCAL SHARED BUFFER
+    __kernel void adddense(__global  float* matData,     // INPUT MATRIX DATA
+                            __global  uint*  colIdx,
+                            __global  uint*  rowNnz,
+                            float  lr,
+                            uint   ellwidth,
+                            uint   awidth,
+                            __global  float* vector_x    // INPUT
+                            ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
-      uint gid2 = get_global_id(1);
-      uint topk = get_global_size(0);
-      uint bs = get_global_size(1);
-      uint baseupdateidx = topk*topk*gid2;
-      uint baseidxidx = topk*gid2;
-      uint col = updateyidx[baseidxidx+gid];
+      uint nrows = get_global_size(0);
 
-      for (uint i=0; i<topk; i++) {
-        float val = updatevals[baseupdateidx+gid*topk+i];
-        uint row = updatexidx[baseidxidx+i];
-        for (uint i=0; i<rowNnz[row]; i++) {
-          uint idx = row*ellwidth+i;
-          if (colIdx[idx] >= col) {
-            //printf("\\nFOUND:%i/%i  - idx:%i", colIdx[idx], col, idx);
-            if (colIdx[idx] == col) {
-              matData[idx] += -(val*lr)/bs;
-              //printf("\\nUPDATE[%i,%i]: %f", row,col, val);
-              break;
-            } else {
-              // insert new column
-              //printf("\\nINSERT[%i,%i]: %.2f", row,col, val);
-              for (uint j=rowNnz[row]+1; j>i; j--) {
-                uint idx2 = row*ellwidth+j;
-                matData[idx2] = matData[idx2-1];
-                colIdx[idx2] = colIdx[idx2-1];
-              }
-              matData[idx] = -((val*lr)/bs);
-              colIdx[idx] = col;
-              rowNnz[row] += 1;
-              break;
-            }
-          }
+      uint nnz    = rowNnz[gid];
+      uint baseidxs = gid*ellwidth;
+      uint baseidxd = gid*awidth;
+
+      for (uint i=0; i<awidth; i++) {
+        float addval = vector_x[baseidxd+i];
+        //if (gid==1)
+        //  printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[baseidxs+i]);
+        if (addval == 0) {
+          continue;
         }
-        if (rowNnz[row] >= ellwidth) {
-          break;
+        if (i == colIdx[baseidxs+i]) {
+          matData[baseidxs+i] += addval*lr;
+        } else {
+          if (i > colIdx[baseidxs+i])
+            break;
+          for (uint j=nnz; j>i; j--) {
+            //printf("\\nMOVE:%.2f", matData[baseidx+j-1]);
+            colIdx[baseidxs+j] = colIdx[baseidxs+j-1];
+            matData[baseidxs+j] = matData[baseidxs+j-1];
+          }
+          rowNnz[gid] += 1;
+          nnz = rowNnz[gid];
+          //if (gid==1)
+          //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
+          matData[baseidxs+i] = addval*lr;
+          colIdx[baseidxs+i] = i;
+          if (nnz >= ellwidth)
+            break;
         }
       }
-    }""").build().__getattr__('addvals')
+    }""").build().__getattr__('adddense')
 
     # resa = np.ones(self.shape[0]).astype(np.float32)
     # cl.enqueue_copy(ctx.cl_queue, resa, grad.cl)
@@ -337,66 +337,61 @@ class SparseTensor(Tensor):
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
-    addvals(ctx.cl_queue, [topk,bs], None,
-      self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw), grad[0].cl, grad[1].cl, grad[2].cl)
+    adddense(ctx.cl_queue, [grad.shape[0]], None,
+      self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(-lr), np.uint32(self.ellw), np.uint32(grad.shape[1]), grad.data.cl)
 
-    addvals2 = cl.Program(ctx.cl_ctx,
+    adddenset = cl.Program(ctx.cl_ctx,
      """
     // Every global_id_0 works on a row
-    __kernel void addvals2(__global  float* matData,     // INPUT MATRIX DATA
-                         __global  uint*  colIdx,
-                         __global  uint*  rowNnz,
-                         float lr,
-                         uint   ellwidth,
-                         __global  float* updatevals,    // INPUT
-                         __global  uint* updatexidx,
-                         __global  uint* updateyidx
-                         ) { // LOCAL SHARED BUFFER
+    __kernel void adddenset(__global  float* matData,     // INPUT MATRIX DATA
+                            __global  uint*  colIdx,
+                            __global  uint*  rowNnz,
+                            float  lr,
+                            uint   ellwidth,
+                            uint   aheight,
+                            __global  float* vector_x    // INPUT
+                            ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
-      uint gid2 = get_global_id(1);
-      uint topk = get_global_size(0);
-      uint bs = get_global_size(1);
-      uint baseupdateidx = topk*topk*gid2;
-      uint baseidxidx = topk*gid2;
-      uint row = updateyidx[baseidxidx+gid];
+      uint ncols = get_global_size(0);
 
-      for (uint i=0; i<topk; i++) {
-        float val = updatevals[baseupdateidx+gid*topk+i];
-        uint col = updatexidx[baseidxidx+i];
-        for (uint i=0; i<rowNnz[row]; i++) {
-          uint idx = row*ellwidth+i;
-          if (colIdx[idx] >= col) {
-            //printf("\\nFOUND:%i/%i  - idx:%i", colIdx[idx], col, idx);
-            if (colIdx[idx] == col) {
-              matData[idx] += -val*lr;
-              //printf("\\nUPDATE[%i,%i]: %f", row,col, val);
-              break;
-            } else {
-              // insert new column
-              //printf("\\nINSERT[%i,%i]: %.2f", row,col, val);
-              for (uint j=rowNnz[row]+1; j>i; j--) {
-                uint idx2 = row*ellwidth+j;
-                matData[idx2] = matData[idx2-1];
-                colIdx[idx2] = colIdx[idx2-1];
-              }
-              matData[idx] = -val*lr;
-              colIdx[idx] = col;
-              rowNnz[row] += 1;
-              break;
-            }
-          }
+      uint nnz    = rowNnz[gid];
+      uint baseidxs = gid*ellwidth;
+
+      for (uint i=0; i<aheight; i++) {
+        uint baseidxd = i*aheight+gid;
+        float addval = vector_x[baseidxd];
+        //if (gid==1)
+        //  printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[baseidxs+i]);
+        if (addval == 0) {
+          continue;
         }
-        if (rowNnz[row] >= ellwidth) {
-          break;
+        if (i == colIdx[baseidxs+i]) {
+          matData[baseidxs+i] += addval;
+        } else {
+          if (i > colIdx[baseidxs+i])
+            break;
+          for (uint j=nnz; j>i; j--) {
+            //printf("\\nMOVE:%.2f", matData[baseidx+j-1]);
+            colIdx[baseidxs+j] = colIdx[baseidxs+j-1];
+            matData[baseidxs+j] = matData[baseidxs+j-1];
+          }
+          rowNnz[gid] += 1;
+          nnz = rowNnz[gid];
+          //if (gid==1)
+          //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
+          matData[baseidxs+i] = addval;
+          colIdx[baseidxs+i] = i;
+          if (nnz >= ellwidth)
+            break;
         }
       }
-    }""").build().__getattr__('addvals2')
+    }""").build().__getattr__('adddenset')
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
-    addvals2(ctx.cl_queue, [topk,bs], None,
-      self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(lr), np.uint32(self.ellwt), grad[0].cl, grad[1].cl, grad[2].cl)
-    self._ctx = None
+    adddenset(ctx.cl_queue, [grad.shape[1]], None,
+      self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(-lr), np.uint32(self.ellwt), np.uint32(grad.shape[0]), grad.data.cl)
+    # self._ctx = None
 
   def to_(self, device):
     self.data, self.device = self._move_data(self.data, device), device
@@ -416,35 +411,35 @@ class SparseTensor(Tensor):
 
     # fill in the first grad with one
     # this is "implicit gradient creation"
-    self.grad = DenseTensor(np.ones(self.shape, dtype=self.dtype), device=self.device, requires_grad=False)
+    self.grad = densetensor(np.ones(self.shape, dtype=self.dtype), device=self.device, requires_grad=false)
 
     for t0 in reversed(self.deepwalk()):
-      assert (t0.grad is not None)
-      with ProfileOp(t0._ctx.__class__.__name__, [t0.grad], backward=True) as po:
-        # print('t0:', t0)
-        grads = t0._ctx.backward(t0._ctx, t0.grad.data)
+      # print("t0:",t0)
+      assert (t0.grad is not none)
+      with profileop(t0._ctx.__class__.__name__, [t0.grad], backward=true) as po:
+        # print('t0:', t0, t0.grad.cpu().data)
+        grads = t0._ctx.backward(t0._ctx, t0)
       if len(t0._ctx.parents) == 1:
         grads = [grads]
-      # print("PRT:", t0._ctx.parents)
-      # print("GRDS:", grads)
+      # print("prt:", t0._ctx.parents)
+      # print("grds:",g rads)
       for t, g in zip(t0._ctx.parents, grads):
-        # print("T/g:",t,g)
+        # print("t/g:",t,g)
         try:
           if t.is_sparse():
-            # print("SPARSE!",t)
-            t._ctx = t0._ctx
-            gt = g#DenseTensor(g, device=self.device, requires_grad=False)
-            t.grad = gt if t.grad is None else (t.grad + gt)
+            # print("sparse!",g)
+            # t._ctx = t0._ctx
+            gt = g#densetensor(g, device=self.device, requires_grad=false)
+            t.grad = gt if t is none else (t + gt)
             continue
-        except Exception as e:
-          print("ERR:", e)
+        except exception as e:
+          print("err:", e)
           pass
-        if g is not None:
+        if g is not none:
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"
-          gt = DenseTensor(g, device=self.device, requires_grad=False)
-          t.grad = gt if t.grad is None else (t.grad + gt)
-
+          gt = DenseTensor(g.data, device=self.device, requires_grad=false)
+          t.grad = gt if t is none else (t + gt)
 
   # ***** non first class ops *****
 
@@ -565,8 +560,13 @@ class SparseFunction:
     for k, v in kwargs.items():
       setattr(ctx, k, v)
     with ProfileOp(ctx.__class__.__name__, x) as po:
-      po.output = ret = DenseTensor(self.forward(ctx, *[t for t in x], **kwargs),
-                   device=ctx.device, requires_grad=any([t.requires_grad for t in x]))
+      # is_sparsematmul = ctx.__class__.__name__ == 'Matmul' and isinstance(x[0], SparseTensor)
+      res = self.forward(ctx, *[t.data if 'DenseTensor' in t.__class__.__name__ else t for t in x], **kwargs)
+      if isinstance(res, GPUBuffer):
+        po.output = ret = DenseTensor(res,
+                     device=ctx.device, requires_grad=any([t.requires_grad for t in x]))
+      else:
+        po.output = ret = res
     if ret.requires_grad:
       ret._ctx = ctx
     return ret
@@ -580,8 +580,9 @@ def register_sparse(name, fxn, device=Device.CPU):
     f = SparseTensor.ops[tt.device][name]
     # print('CTX:', cl_ctx)
     f.cl_ctx, f.cl_queue, f.ane, f.device = cl_ctx, cl_queue, ane, tt.device
-    # print('APPLY:', *x, f)
-    return f.apply(f, *x, **kwargs)
+    ret= f.apply(f, *x, **kwargs)
+    print('APPLY:', *x, f, ret)
+    return ret
   setattr(SparseTensor, name, dispatch)
   if name in ['add', 'sub', 'mul', 'pow', 'matmul']:
     setattr(SparseTensor, f"__{name}__", dispatch)

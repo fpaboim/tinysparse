@@ -21,7 +21,9 @@ class SGD(Optimizer):
       # print(t, t.grad)
       if t.is_sparse():
         t.updategrad(t.grad, self.lr)
+        t._ctx = None
       else:
+        # print("UPDATE GRAD", t.grad.cpu().data, self.lr)
         self.decay = self.decay * self.factor
         t -= t.grad * self.lr
 
@@ -42,13 +44,14 @@ class Adam(Optimizer):
     super().__init__(params)
     self.lr, self.b1, self.b2, self.eps, self.t = lr, b1, b2, eps, 0
 
-    self.m = [DenseTensor.zeros(*t.shape, device=params[0].device, requires_grad=False) for t in self.params]
-    self.v = [DenseTensor.zeros(*t.shape, device=params[0].device, requires_grad=False) for t in self.params]
+    self.m = [DenseTensor.zeros(*t.shape, device=params[0].device, requires_grad=False).gpu() for t in self.params]
+    self.v = [DenseTensor.zeros(*t.shape, device=params[0].device, requires_grad=False).gpu() for t in self.params]
 
   def step(self):
     self.t = self.t + 1
     a = self.lr * ((1.0 - self.b2**self.t)**0.5) / (1.0 - self.b1**self.t)
     for i, t in enumerate(self.params):
+      print("T:", t)
       self.m[i] = self.b1 * self.m[i] + (1.0 - self.b1) * t.grad
       self.v[i] = self.b2 * self.v[i] + (1.0 - self.b2) * t.grad * t.grad
       t -= a * self.m[i].div(self.v[i].sqrt() + self.eps)

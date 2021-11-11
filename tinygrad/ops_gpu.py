@@ -1,7 +1,7 @@
 import functools
 import pyopencl as cl
 import numpy as np
-from .densetensor import Function, GPUBuffer
+from .densetensor import Function, GPUBuffer, DenseTensor
 
 def buffer_new(ctx, shape, zero=False):
   return GPUBuffer(shape, hostbuf=None if not zero else np.zeros(shape, dtype=np.float32))
@@ -165,6 +165,8 @@ def get_binop_prg(cl_ctx, code, complist):
     res_g[gid0] = """+code+""";\n}""").build()
 
 def binary_op(ctx, code, x, y):
+  # print('asfd',code,x,y)
+  # if isinstance(x)
   n_dims = max(len(x.shape), len(y.shape))
   shape_x, shape_y = np.ones(n_dims, dtype=np.int32), np.ones(n_dims, dtype=np.int32)
   shape_x[:len(x.shape)] = np.array(x.shape, dtype=np.int32)
@@ -251,6 +253,7 @@ class Reshape(Function):
     return GPUBuffer(in_shape, hostbuf=grad_output)
 
 def perm_axis(ctx, inp, order):
+  # print("PERM:", inp, order)
   osize = np.array(inp.shape)[list(order)]
   ret = buffer_new(ctx, osize)
   perm = clbuild(ctx.cl_ctx, "perm", """
@@ -270,14 +273,17 @@ def perm_axis(ctx, inp, order):
   perm(ctx.cl_queue, [np.prod(osize)], None, inp.cl, ret.cl, i32(len(osize)),
     buffer_np(ctx, np.array(inp.shape, dtype=np.int32)),
     buffer_np(ctx, np.array(order, dtype=np.int32)))
+  print("RAN")
   return ret
 
 class Transpose(Function):
   def forward(ctx, x, order=(1,0)):
+    # print("PERM F:", x)
     ctx.save_for_backward(order)
     return perm_axis(ctx, x, order)
 
   def backward(ctx, grad_output):
+    # print("PERM BACK:", grad_output)
     return perm_axis(ctx, grad_output, np.argsort(ctx.order))
 
 # TODO: merge this with perm axis
@@ -321,7 +327,7 @@ class Slice(Function):
 
 class Matmul(Function):
   def forward(ctx, input, weight):
-    # print("WEGHT:", input.shape, weight.shape)
+    # print("WEGHT:", input, weight)
     assert input.shape[-1] == weight.shape[-2]
     cnt = np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
@@ -356,6 +362,7 @@ class Matmul(Function):
     return ret
 
   def backward(ctx, grad_output):
+    # print("GO:", DenseTensor(grad_output).cpu().data)
     input, weight, matmul, cnt = ctx.saved_tensors
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
 
@@ -372,6 +379,8 @@ class Matmul(Function):
       input.cl, grad_output.cl, grad_weight.cl, msize,
       i32(1), msize, isize, i32(1), osize, osize)
 
+    # print('IN', DenseTensor(input).cpu().data)
+    # print('W', DenseTensor(grad_weight).cpu().data)
     return grad_input, grad_weight
 
 class Conv2D(Function):
@@ -493,4 +502,5 @@ class Conv2D(Function):
     conv_args = i32(H), i32(W), i32(ctx.groups), i32(rcout), i32(cin), i32(oy), i32(ox), i32(iy), i32(ix), i32(ys), i32(xs), i32(bs)
     convw(ctx.cl_queue, [ctx.groups*rcout*cin, H, W], None, x.cl, grad_output.cl, dw.cl, *conv_args)
     convx(ctx.cl_queue, [bs, ctx.groups, cin], None, w.cl, grad_output.cl, dx.cl, *conv_args)
+
     return dx, dw

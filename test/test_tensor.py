@@ -1,10 +1,11 @@
 import numpy as np
 import torch
 import unittest
-from tinygrad.tensor import Tensor, DEFAULT_DEVICE
+from tinygrad.densetensor import DenseTensor, DEFAULT_DEVICE
+from tinygrad.sparsetensor import SparseTensor
 from extra.gradcheck import numerical_jacobian, jacobian, gradcheck
 
-x_init = np.random.randn(1,3).astype(np.float32)
+x_init = np.random.randn(3,3).astype(np.float32)
 U_init = np.random.randn(3,3).astype(np.float32)
 V_init = np.random.randn(3,3).astype(np.float32)
 W_init = np.random.randn(3,3).astype(np.float32)
@@ -14,9 +15,9 @@ class TestTinygrad(unittest.TestCase):
 
   def test_backward_pass(self):
     def test_tinygrad():
-      x = Tensor(x_init)
-      W = Tensor(W_init)
-      m = Tensor(m_init)
+      x = SparseTensor(x_init)
+      W = DenseTensor(W_init)
+      m = DenseTensor(m_init)
       out = x.dot(W).relu()
       out = out.logsoftmax()
       out = out.mul(m).add(m).sum()
@@ -38,9 +39,9 @@ class TestTinygrad(unittest.TestCase):
 
   def test_backward_pass_diamond_model(self):
     def test_tinygrad():
-      u = Tensor(U_init)
-      v = Tensor(V_init)
-      w = Tensor(W_init)
+      u = DenseTensor(U_init)
+      v = DenseTensor(V_init)
+      w = DenseTensor(W_init)
       x = u.mul(v).relu()
       y = u.mul(w).relu()
       out = x.add(y).mul(y).relu()
@@ -65,9 +66,9 @@ class TestTinygrad(unittest.TestCase):
       np.testing.assert_allclose(x, y, atol=1e-5)
 
   def test_dropout(self):
-    Tensor.training = True
+    DenseTensor.training = True
     n, rate = 1_000_000, 0.1
-    w = Tensor.ones(n).dropout(rate)
+    w = DenseTensor.ones(n).dropout(rate)
     non_zeros = np.count_nonzero(w.cpu().data)
     expected = n * (1 - rate)
     np.testing.assert_allclose(non_zeros, expected, rtol=1e-3)
@@ -82,8 +83,8 @@ class TestTinygrad(unittest.TestCase):
     torch_func = lambda x: torch.nn.functional.log_softmax(x.matmul(torch_W).relu(), dim=1)
     PJ = torch.autograd.functional.jacobian(torch_func, torch_x).squeeze().numpy()
 
-    tiny_x = Tensor(x)
-    tiny_W = Tensor(W)
+    tiny_x = DenseTensor(x)
+    tiny_W = DenseTensor(W)
     tiny_func = lambda x: x.dot(tiny_W).relu().logsoftmax()
     J = jacobian(tiny_func, tiny_x)
     NJ = numerical_jacobian(tiny_func, tiny_x)
@@ -96,8 +97,8 @@ class TestTinygrad(unittest.TestCase):
     W = np.random.RandomState(1337).random((10, 5))
     x = np.random.RandomState(7331).random((1, 10)) - 0.5
 
-    tiny_x = Tensor(x)
-    tiny_W = Tensor(W)
+    tiny_x = DenseTensor(x)
+    tiny_W = DenseTensor(W)
     tiny_func = lambda x: x.dot(tiny_W).relu().logsoftmax()
 
     self.assertTrue(gradcheck(tiny_func, tiny_x))

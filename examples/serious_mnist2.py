@@ -5,16 +5,16 @@ sys.path.append(os.path.join(os.getcwd(), 'test'))
 
 import numpy as np
 from tinygrad.densetensor import DenseTensor, GPU
-from tinygrad.sparsetensor import SparseTensor
 from tinygrad.nn import BatchNorm2D
 from extra.utils import get_parameters
 from test.test_mnist import fetch_mnist
 from extra.training import train, evaluate, sparse_categorical_crossentropy
 import tinygrad.optim as optim
 from extra.augment import augment_img
+
 GPU = True
-QUICK = False
-DEBUG = False
+QUICK = os.getenv("QUICK", None) is not None
+DEBUG = os.getenv("DEBUG", None) is not None
 
 class SqueezeExciteBlock2D:
   def __init__(self, filters):
@@ -98,43 +98,14 @@ class BigConvNet:
     xo = x1.dot(self.weight1) + x2.dot(self.weight2)
     return xo.logsoftmax()
 
-# class MLP:
-#   def __init__(self):
-#     self.weight1 = SparseTensor.uniform(10,784)
-#     # self.weight1 = DenseTensor.uniform(10,784)
-
-#   def parameters(self):
-#     return get_parameters(self)
-
-#   def forward(self, x):
-#     x = self.weight1.dot(x.transpose()).transpose()
-#     x = x.softmax()
-#     return x
-
-class MLP:
-  def __init__(self):
-    self.weight1 = SparseTensor.uniform(784,10)
-    self.weight2 = DenseTensor.uniform(784,10)
-    # self.weight2 = SparseTensor.uniform(784,10)
-
-  def parameters(self):
-    return get_parameters(self)
-
-  def forward(self, x):
-    # print("X:", x)
-    x = self.weight1.dot(x.transpose())
-    # x = x.dot(self.weight2)
-    x = x.transpose()
-    x = x.softmax()
-    return x
 
 if __name__ == "__main__":
-  lrs = [1e-4] #if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
+  lrs = [1e-4, 1e-5] if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
   epochss = [2, 1] if QUICK else [13, 3, 3, 1]
-  BS = 64
+  BS = 32
 
   lmbd = 0.00025
-  lossfn = lambda out,y: sparse_categorical_crossentropy(out, y)
+  lossfn = lambda out,y: sparse_categorical_crossentropy(out, y) + lmbd*(model.weight1.abs() + model.weight2.abs()).sum()
   X_train, Y_train, X_test, Y_test = fetch_mnist()
   steps = len(X_train)//BS
   np.random.seed(1337)
@@ -142,7 +113,7 @@ if __name__ == "__main__":
     steps = 1
     X_test, Y_test = X_test[:BS], Y_test[:BS]
 
-  model = MLP()
+  model = BigConvNet()
 
   if len(sys.argv) > 1:
     try:
@@ -157,10 +128,10 @@ if __name__ == "__main__":
     [x.gpu_() for x in params]
 
   for lr, epochs in zip(lrs, epochss):
-    optimizer = optim.SGD(model.parameters(), lr=.0001)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
     for epoch in range(1,epochs+1):
       #first epoch without augmentation
-      X_aug = X_train #if epoch == 1 else augment_img(X_train)
-      train(model, X_aug, Y_train, optimizer, steps=steps,  BS=BS)
+      X_aug = X_train if epoch == 1 else augment_img(X_train)
+      train(model, X_aug, Y_train, optimizer, steps=steps, lossfn=lossfn, BS=BS)
       accuracy = evaluate(model, X_test, Y_test, BS=BS)
-      # model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')
+      model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')

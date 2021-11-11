@@ -12,12 +12,14 @@ class Tensor:
     return False
 
   def deepwalk(self):
-    def _deepwalk(node, visited, nodes):
+    j = 0
+    def _deepwalk(node, visited, nodes, j):
+      # print("\\nVISIT", node)
       visited.add(node)
       if node._ctx:
-        [_deepwalk(i, visited, nodes) for i in node._ctx.parents if i not in visited]
+        [_deepwalk(i, visited, nodes, j) for i in node._ctx.parents if i not in visited]
         nodes.append(node)
       return nodes
-    return _deepwalk(self, set(), [])
+    return _deepwalk(self, set(), [], j)
 
   # ***** toposort and backward pass *****
