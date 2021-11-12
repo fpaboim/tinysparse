@@ -324,13 +324,14 @@ class Slice(SparseFunction):
 # ************* processing ops *************
 
 class Matmul(SparseFunction): # input and weights are swapped, legacy..
-  def forward(ctx, weight, input):
+  def forward(ctx, input, weight):
     print("WEIGHT/input:", weight, input)
     # print(input.shape, weight.shape)
     # assert weight.shape[-2] == input.shape[-1]
 
-    cnt = np.prod(weight.shape[0:-2]) if len(weight.shape) > 2 else 1
-    isize, msize, osize = i32(weight.shape[-2]), i32(weight.shape[-1]), i32(input.shape[-1])
+    assert input.shape[-1] == weight.shape[-2]
+    cnt = np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
+    isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
     outshape = (weight.shape[1], osize)
     # print("OUT:", outshape)
     outdata = np.zeros(outshape)
