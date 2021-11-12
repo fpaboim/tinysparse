@@ -18,10 +18,11 @@ class SGD(Optimizer):
 
   def step(self):
     for t in self.params:
-      # print(t, t.grad)
+      # print('GRADt:', t, t.grad.cpu().data, t._ctx)
       if t.is_sparse():
+        # print('GRAD:', t.grad.cpu().data)
         t.updategrad(t.grad, self.lr)
-        t._ctx = None
+        # t._ctx = None
       else:
         # print("UPDATE GRAD", t.grad.cpu().data, self.lr)
         self.decay = self.decay * self.factor
@@ -51,7 +52,7 @@ class Adam(Optimizer):
     self.t = self.t + 1
     a = self.lr * ((1.0 - self.b2**self.t)**0.5) / (1.0 - self.b1**self.t)
     for i, t in enumerate(self.params):
-      print("T:", t)
+      # print("T:", t)
       self.m[i] = self.b1 * self.m[i] + (1.0 - self.b1) * t.grad
       self.v[i] = self.b2 * self.v[i] + (1.0 - self.b2) * t.grad * t.grad
       t -= a * self.m[i].div(self.v[i].sqrt() + self.eps)

@@ -47,7 +47,7 @@ class SparseTensor(Tensor):
   ops = defaultdict(dict)
 
   def __init__(self, dense_data=[], from_datas={}, idxs=[], nnzs=[], ellw=None,
-               shape=None, randinit=[], randsparsity=0.9, bs=32, device=DEFAULT_DEVICE, requires_grad=True):
+               shape=None, randinit=[], randsparsity=0.9, bs=32, device=DEFAULT_DEVICE, requires_grad=True, ctx=None):
     self.device = device
 
     if len(randinit)==0:
@@ -75,21 +75,21 @@ class SparseTensor(Tensor):
       idxst = self._move_data(from_datas['idxst'], device, np.uint32)
       nnzst = self._move_data(from_datas['nnzst'], device, np.uint32)
       ellwt = from_datas['ellwt']
+    else:
+      self.data = self._move_data(data, device, np.float32)
+      self.idxs = self._move_data(idxs, device, np.uint32)
+      self.nnzs = self._move_data(nnzs, device, np.uint32)
+      self.ellw = ellw
 
-    self.data = self._move_data(data, device, np.float32)
-    self.idxs = self._move_data(idxs, device, np.uint32)
-    self.nnzs = self._move_data(nnzs, device, np.uint32)
-    self.ellw = ellw
-
-    self.datat = self._move_data(datat, device, np.float32)
-    self.idxst = self._move_data(idxst, device, np.uint32)
-    self.nnzst = self._move_data(nnzst, device, np.uint32)
-    self.ellwt = ellwt
+      self.datat = self._move_data(datat, device, np.float32)
+      self.idxst = self._move_data(idxst, device, np.uint32)
+      self.nnzst = self._move_data(nnzst, device, np.uint32)
+      self.ellwt = ellwt
 
     self.grad, self.requires_grad = None, requires_grad
 
     # internal variables used for autograd graph construction
-    self._ctx = None
+    self._ctx = ctx
 
   def __repr__(self):
     return f"<SparseTensor {self.data!r} with grad {(self.grad if self.grad else None)!r}>"
@@ -113,7 +113,7 @@ class SparseTensor(Tensor):
         submat = mat[i]
         newmax = len(submat[submat != 0])
         maxnnz = max(maxnnz, newmax)
-      ellwidth = maxnnz*2
+      ellwidth = maxnnz
     # print("ELLW:", ellwidth)
     all_rows = []
     all_idxs = []
@@ -145,7 +145,8 @@ class SparseTensor(Tensor):
     all_nnzs = []
     nnzs = int(shape[1]*(1-sparsity))+1
     ellwidth = int((nnzs/2)+1)*4
-    ellwidth = min(ellwidth, shape[1])
+    ellwidth = max(ellwidth, shape[0])
+    # print('ellw:', ellwidth, shape)
     cols = {}
     for row in range(shape[0]):
       rowdata = np.random.rand(nnzs) / int(sparsity*shape[1])#/ (nnzs)
@@ -186,7 +187,7 @@ class SparseTensor(Tensor):
         all_idxst.append([])
         all_nnzst.append(0)
     ellwidtht = (int(maxw/2)+1)*2
-    ellwidtht = min(ellwidtht, shape[0])
+    ellwidtht = max(ellwidtht, shape[0])
     # print('ellwt:', ellwidtht)
     for irow in range(len(all_rowst)):
       # print(all_rowst[irow])
@@ -275,16 +276,17 @@ class SparseTensor(Tensor):
     dim = (self.shape[0])
     res= np.zeros(dim).astype(np.uint32)
     cl.enqueue_copy(self._ctx.cl_queue, res, self.nnzs.cl)
-    print('RES:', res.sum())
+    # print('RES:', res.sum())
     return res.sum(axis=0)
 
   def updategrad(self, grad, lr):
     # print("UPDATE GRAD", grad.cpu().data, lr)
     # Weight update
-    ctx = self._ctx
+    global cl_ctx, cl_queue
+    ctx = cl_ctx
     bs = grad[1].shape[0]
 
-    adddense = cl.Program(ctx.cl_ctx,
+    adddense = cl.Program(ctx,
      """
     // Every global_id_0 works on a row
     __kernel void adddense(__global  float* matData,     // INPUT MATRIX DATA
@@ -337,10 +339,10 @@ class SparseTensor(Tensor):
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
-    adddense(ctx.cl_queue, [grad.shape[0]], None,
+    adddense(cl_queue, [grad.shape[0]], None,
       self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(-lr), np.uint32(self.ellw), np.uint32(grad.shape[1]), grad.data.cl)
 
-    adddenset = cl.Program(ctx.cl_ctx,
+    adddenset = cl.Program(ctx,
      """
     // Every global_id_0 works on a row
     __kernel void adddenset(__global  float* matData,     // INPUT MATRIX DATA
@@ -389,7 +391,7 @@ class SparseTensor(Tensor):
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
-    adddenset(ctx.cl_queue, [grad.shape[1]], None,
+    adddenset(cl_queue, [grad.shape[1]], None,
       self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(-lr), np.uint32(self.ellwt), np.uint32(grad.shape[0]), grad.data.cl)
     # self._ctx = None
 
@@ -425,21 +427,22 @@ class SparseTensor(Tensor):
       # print("grds:",g rads)
       for t, g in zip(t0._ctx.parents, grads):
         # print("t/g:",t,g)
-        try:
-          if t.is_sparse():
-            # print("sparse!",g)
-            # t._ctx = t0._ctx
-            gt = g#densetensor(g, device=self.device, requires_grad=false)
-            t.grad = gt if t is none else (t + gt)
-            continue
-        except exception as e:
-          print("err:", e)
-          pass
+        # try:
+        #   if t.is_sparse():
+        #     # print("sparse!",g)
+        #     # t._ctx = t0._ctx
+        #     gt = g#densetensor(g, device=self.device, requires_grad=false)
+        #     t.grad = gt if t is none else (t + gt)
+        #     continue
+        # except exception as e:
+        #   print("err:", e)
+        #   pass
         if g is not none:
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"
           gt = DenseTensor(g.data, device=self.device, requires_grad=false)
           t.grad = gt if t is none else (t + gt)
+          print("SET GRAD:", t, gt)
 
   # ***** non first class ops *****
 
@@ -581,7 +584,7 @@ def register_sparse(name, fxn, device=Device.CPU):
     # print('CTX:', cl_ctx)
     f.cl_ctx, f.cl_queue, f.ane, f.device = cl_ctx, cl_queue, ane, tt.device
     ret= f.apply(f, *x, **kwargs)
-    print('APPLY:', *x, f, ret)
+    # print('APPLY:', *x, f, ret)
     return ret
   setattr(SparseTensor, name, dispatch)
   if name in ['add', 'sub', 'mul', 'pow', 'matmul']:

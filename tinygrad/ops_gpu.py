@@ -37,7 +37,7 @@ class ReLU(Function):
 
   def backward(ctx, grad_output):
     input, = ctx.saved_tensors
-    return binary_op(ctx, 'a * (b >= 0)', grad_output, input)
+    return binary_op(ctx, '(b >=0) ? a : 0;', grad_output, input)
 
 class Log(Function):
   def forward(ctx, input):
@@ -76,7 +76,6 @@ def reduce_op(ctx, code, code2, inp, axis=None, start="0.0"):
   __kernel void reduce(__global const float *a_g, int sz, __global float *res_g, int prod, int n_dims,
                        __global const int *shape_x, __global const int *shape_ret) {
     int gid = get_global_id(0);
-
     float out = """+start+""";
     for (int x = 0; x < sz; x++) {
       int idx = 0;  // compute index into a_g
@@ -93,24 +92,17 @@ def reduce_op(ctx, code, code2, inp, axis=None, start="0.0"):
         }
       }
       float a = a_g[idx];
-      //if (get_global_size(0)==128)
-      //  printf("\\na: %.2f",a);
       """+code+""";
     }
     res_g[gid] = """+code2+""";
   }""")
-  try:
-    gdim = np.prod(osize)
-    # print("RED GDIM:", gdim)
-    reduce(ctx.cl_queue, [gdim], None, inp.cl,
-      i32(np.prod(inp.shape)//np.prod(osize)), ret.cl,
-      i32(np.prod(osize)), i32(len(osize)),
-      buffer_np(ctx, np.array(inp.shape, dtype=np.int32)),
-      buffer_np(ctx, np.array(osize, dtype=np.int32)))
-  except Exception as e:
-    print(e)
-    print("GDIM:", gdim, osize, inp, ret)
+  reduce(ctx.cl_queue, [np.prod(osize)], None, inp.cl,
+    i32(np.prod(inp.shape)//np.prod(osize)), ret.cl,
+    i32(np.prod(osize)), i32(len(osize)),
+    buffer_np(ctx, np.array(inp.shape, dtype=np.int32)),
+    buffer_np(ctx, np.array(osize, dtype=np.int32)))
   return ret
+
 
 class Sum(Function):
   def forward(ctx, input, axis=None):
@@ -157,16 +149,16 @@ def get_binop_prg(cl_ctx, code, complist):
     for j in range(2):
       if complist[i][j]:
         idx_exprs[j] = "idx_ret%d + d%d*(%s)" % (i, i, idx_exprs[j])
+  # print("IDXEXP:", idx_exprs)
 
   return cl.Program(cl_ctx, """__kernel void binop(__global const float *x_g, __global const float *y_g, __global float *res_g"""+args+""") {
     int gid0 = get_global_id(0);"""+compute_idx_rets+"""
     float a = x_g["""+idx_exprs[0]+"""];
     float b = y_g["""+idx_exprs[1]+"""];
+    barrier(CLK_GLOBAL_MEM_FENCE);
     res_g[gid0] = """+code+""";\n}""").build()
 
 def binary_op(ctx, code, x, y):
-  # print('asfd',code,x,y)
-  # if isinstance(x)
   n_dims = max(len(x.shape), len(y.shape))
   shape_x, shape_y = np.ones(n_dims, dtype=np.int32), np.ones(n_dims, dtype=np.int32)
   shape_x[:len(x.shape)] = np.array(x.shape, dtype=np.int32)
@@ -253,7 +245,6 @@ class Reshape(Function):
     return GPUBuffer(in_shape, hostbuf=grad_output)
 
 def perm_axis(ctx, inp, order):
-  # print("PERM:", inp, order)
   osize = np.array(inp.shape)[list(order)]
   ret = buffer_new(ctx, osize)
   perm = clbuild(ctx.cl_ctx, "perm", """
@@ -273,18 +264,65 @@ def perm_axis(ctx, inp, order):
   perm(ctx.cl_queue, [np.prod(osize)], None, inp.cl, ret.cl, i32(len(osize)),
     buffer_np(ctx, np.array(inp.shape, dtype=np.int32)),
     buffer_np(ctx, np.array(order, dtype=np.int32)))
-  print("RAN")
+
+  # print("PERM RET:", ret)
+  return ret
+
+def trans_axis(ctx, inp, order):
+  osize = np.array(inp.shape)[list(order)]
+  ret = buffer_new(ctx, osize)
+  trans = clbuild(ctx.cl_ctx, "trans", """
+    __kernel void trans(__global float *a_g,
+                        __global float *res_g,
+                        uint width) {
+      int row = get_global_id(0);
+      for(uint i=0; i<width; i++) {
+        //printf("\\nSET:%i-%i", row, i);
+        res_g[row*width+i] = 0;
+      }
+    }""")
+  trans(ctx.cl_queue, [osize[1]], None, inp.cl, ret.cl, np.uint32(osize[0]))
+
+  # print("PERM RET:", ret)
   return ret
 
 class Transpose(Function):
-  def forward(ctx, x, order=(1,0)):
-    # print("PERM F:", x)
-    ctx.save_for_backward(order)
-    return perm_axis(ctx, x, order)
+  def forward(ctx, inp, order=(1,0)):
+    # print("INP T:", inp)
+    osize = np.array(inp.shape).T
+    # print('osize:', osize)
+    ret = buffer_new(ctx, osize)
+    transpose = clbuild(ctx.cl_ctx, "transpose", """
+    __kernel void transpose(__global float *a_g,
+                            __global float *res_g,
+                            uint width) {
+      int row = get_global_id(0);
+      for(uint i=0; i<width; i++) {
+        //printf("\\nSET:%i-%i", row, i);
+        res_g[i*width+row] = a_g[row*width+i] ;
+      }
+    }""")
+
+    ctx.save_for_backward(transpose, inp.shape)
+
+    transpose(ctx.cl_queue, [inp.shape[0]], None, inp.cl, ret.cl, np.uint32(inp.shape[1]))
+    # print("RET:", ret)
+    return ret
 
   def backward(ctx, grad_output):
-    # print("PERM BACK:", grad_output)
-    return perm_axis(ctx, grad_output, np.argsort(ctx.order))
+    transpose,inpshape = ctx.saved_tensors
+    ret = buffer_new(ctx, inpshape)
+    transpose(ctx.cl_queue, [inpshape[1]], None, grad_output.cl, ret.cl, np.uint32(inpshape[0]))
+    # print("RETb:", ret)
+    return ret
+
+class Transpose(Function):
+  def forward(ctx, x, order=(1,0)):
+    ctx.save_for_backward(order)
+    return trans_axis(ctx, x, order)
+
+  def backward(ctx, grad_output):
+    return trans_axis(ctx, grad_output, np.argsort(ctx.order))
 
 # TODO: merge this with perm axis
 def inner_slice(ctx, x, arg):
@@ -327,7 +365,7 @@ class Slice(Function):
 
 class Matmul(Function):
   def forward(ctx, input, weight):
-    # print("WEGHT:", input, weight)
+    # print("WEIGHT/input:", weight.shape, input)
     assert input.shape[-1] == weight.shape[-2]
     cnt = np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])

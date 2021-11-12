@@ -155,11 +155,6 @@ class DenseTensor(Tensor):
       # print("GRDS:", grads)
       for t, g in zip(t0._ctx.parents, grads):
         # print("T/g:",t,g)
-        try:
-          if t.is_sparse():
-            t._ctx = t0._ctx
-        except:
-          pass
         #     # print("SPARSE!",g)
         #     gt = g#DenseTensor(g, device=self.device, requires_grad=False)
         #     t.grad = gt if t.grad is None else (t.grad + gt)
@@ -168,17 +163,24 @@ class DenseTensor(Tensor):
         #   print("ERR:", e)
         #   pass
         if g is not None:
-          # print('T/G:', t,g)
-          # if not isinstance(t, densetensor):
-          #   g = t.grad
+          print('T/G:', t,g,t.shape, g.shape)
+          # if not (not isinstance(t, DenseTensor)) and (not isinstance(t,GPUBuffer)):
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"
           if isinstance(g, DenseTensor):
+            # print("DENSETENSOR")
             gt = g
           else:
             gt = DenseTensor(g, device=self.device, requires_grad=False)
-          # print("SET GRAD:", gt)
           t.grad = gt if t.grad is None else (t.grad + gt)
+          if t.is_sparse():
+            print('T:', t)
+          # try:
+          #   if t.is_sparse():
+          #     t._ctx = t0._ctx
+          # except:
+          #   pass
+          # print("SET GRAD:", t, gt)
 
   def detach(self):
     return DenseTensor(self.data, device=self.device)
@@ -238,10 +240,12 @@ class DenseTensor(Tensor):
 
   def dot(self, w):
     if w.is_sparse():
-      xt = self.transpose()
-      wt = w.transpose()
-      # print("SPRSE MATMUL")
-      return wt.matmul(xt).transpose()
+      # xt = self.transpose()
+      # wt = w#.transpose()
+      # print("SPRSE MATMUL", wt, xt)
+      x = w.matmul(self)
+      # print("Xt:", x)
+      return x
     return self.matmul(w)
 
   def mean(self, axis=None):
@@ -334,7 +338,7 @@ class Function:
     self.saved_tensors.extend(x)
 
   def apply(self, *x, **kwargs):
-    print("APPLY:", x, kwargs)
+    # print("APPLY:", x, kwargs)
     ctx = self(*x) # self - operation i.e 'add', 'sub', etc.
     # use default params
     params = inspect.signature(self.forward).parameters

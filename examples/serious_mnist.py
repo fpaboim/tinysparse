@@ -100,38 +100,41 @@ class BigConvNet:
 
 # class MLP:
 #   def __init__(self):
-#     self.weight1 = SparseTensor.uniform(10,784)
-#     # self.weight1 = DenseTensor.uniform(10,784)
+#     # self.weight1 = SparseTensor.uniform(784,10)
+#     # self.weight1 = DenseTensor.uniform(784,10)
+#     self.weight2 = SparseTensor.uniform(784,784)
+#     # self.weight2 = DenseTensor.uniform(784,784)
+#     self.weight22 = DenseTensor.uniform(784,10)
 
 #   def parameters(self):
 #     return get_parameters(self)
 
 #   def forward(self, x):
-#     x = self.weight1.dot(x.transpose()).transpose()
+#     # print("X:", x)
+#     x = x.dot(self.weight2)
+#     # x = x.transpose()
+#     x = x.dot(self.weight22)
+#     # print("XSH", x.shape)
 #     x = x.softmax()
 #     return x
 
 class MLP:
   def __init__(self):
     self.weight1 = SparseTensor.uniform(784,10)
-    self.weight2 = DenseTensor.uniform(784,10)
-    # self.weight2 = SparseTensor.uniform(784,10)
+    # self.weight1 = DenseTensor.uniform(784,10)
 
   def parameters(self):
     return get_parameters(self)
 
   def forward(self, x):
-    # print("X:", x)
-    x = self.weight1.dot(x.transpose())
-    # x = x.dot(self.weight2)
-    x = x.transpose()
+    x = x.dot(self.weight1)
     x = x.softmax()
     return x
 
 if __name__ == "__main__":
   lrs = [1e-4] #if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
   epochss = [2, 1] if QUICK else [13, 3, 3, 1]
-  BS = 64
+  BS = 32
 
   lmbd = 0.00025
   lossfn = lambda out,y: sparse_categorical_crossentropy(out, y)

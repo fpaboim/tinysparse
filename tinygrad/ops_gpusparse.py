@@ -19,7 +19,6 @@ def uint2(x, y):
 i32 = np.int32
 
 # ************* unary ops *************
-
 def unary_op(ctx, code, x):
   ret = buffer_new(ctx, x.shape)
   unop = clbuild(ctx.cl_ctx, "unop", """
@@ -242,10 +241,9 @@ class Reshape(SparseFunction):
     return in_shape
 
 def perm_axis(ctx, inp, order):
+  # print("PERM:", inp, order)
   osize = np.array(inp.shape)[list(order)]
-  ret = np.zeros(osize)
-  ret = DenseTensor(ret, ctx=ctx)
-  # ret = buffer_new(ctx, osize)
+  ret = buffer_new(ctx, osize)
   perm = clbuild(ctx.cl_ctx, "perm", """
   __kernel void perm(__global const float *a_g, __global float *res_g, int n_axis,
                        __global const int *shape, __global const int *order) {
@@ -260,14 +258,15 @@ def perm_axis(ctx, inp, order):
     }
     res_g[gid] = a_g[idx];
     }""")
-  perm(ctx.cl_queue, [np.prod(osize)], None, inp.data.cl, ret.data.cl, i32(len(osize)),
+  perm(ctx.cl_queue, [np.prod(osize)], None, inp.cl, ret.cl, i32(len(osize)),
     buffer_np(ctx, np.array(inp.shape, dtype=np.int32)),
     buffer_np(ctx, np.array(order, dtype=np.int32)))
+  # print("RAN")
   return ret
 
 class Transpose(SparseFunction):
   def forward(ctx, x):
-    print("T FWD:", x)
+    # print("T FWD:", x)
     newdata = {
      'data': x.datat,
      'idxs': x.idxst,
@@ -282,21 +281,8 @@ class Transpose(SparseFunction):
     ret = SparseTensor(from_datas=newdata, shape=newshape)
     return ret
 
-  def backward(ctx, x):
-    print("T BACK:", x)
-    newdata = {
-     'data': x.datat,
-     'idxs': x.idxst,
-     'nnzs': x.nnzst,
-     'ellw': x.ellwt,
-     'datat': x.data,
-     'idxst': x.idxs,
-     'nnzst': x.nnzs,
-     'ellwt': x.ellw,
-    }
-    newshape = tuple(np.array(x.shape).T)
-    ret = SparseTensor(from_datas=newdata, shape=newshape)
-    return ret
+  def backward(ctx, grad_output):
+    return perm_axis(ctx, grad_output, np.argsort((1,0)))
 
 # TODO: merge this with perm axis
 def inner_slice(ctx, x, arg):
@@ -339,13 +325,14 @@ class Slice(SparseFunction):
 
 class Matmul(SparseFunction): # input and weights are swapped, legacy..
   def forward(ctx, weight, input):
-    # print("WEIGHT/input:", weight, input)
+    print("WEIGHT/input:", weight, input)
     # print(input.shape, weight.shape)
     # assert weight.shape[-2] == input.shape[-1]
 
     cnt = np.prod(weight.shape[0:-2]) if len(weight.shape) > 2 else 1
     isize, msize, osize = i32(weight.shape[-2]), i32(weight.shape[-1]), i32(input.shape[-1])
-    outshape = (isize, osize)
+    outshape = (weight.shape[1], osize)
+    # print("OUT:", outshape)
     outdata = np.zeros(outshape)
     ret = DenseTensor(outdata)
     # ret = buffer_new(ctx.cl_ctx, outshape, zero=True)
@@ -355,6 +342,56 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     matmul = clbuild(ctx.cl_ctx, "matmul", """
     // Every global_id_0 works on a row
     __kernel void matmul(__global  float* matData,     // INPUT MATRIX DATA
+                            __global  uint*  colIdx,
+                            __global  uint*  rowNnz,
+                            uint   mwidth,
+                            uint   ellwidth,
+                            __global  float* vector_x,    // INPUT
+                            __global  float* vector_y    // OUTPUT
+                            ) { // LOCAL SHARED BUFFER
+      uint gid = get_global_id(0);
+      uint nrows = get_global_size(0);
+      uint gid2 = get_global_id(1);
+      uint ncols = get_global_size(1);
+
+      uint nnz    = rowNnz[gid];
+      float sum = 0;
+      for (uint i = 0; i < nnz; i++) {
+        uint index   = (gid * ellwidth) + i;
+        uint col     = colIdx[index];
+        float aval  = matData[index];
+        float xval  = vector_x[gid2*mwidth+col];
+        sum  += aval * xval;
+        //if (gid==1 && gid2==0)
+        //  printf("aval, xval: %.2f,%.2f - %.2f: (%i,%i) \\n", aval, xval, sum, col, index);
+      }
+      //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
+      vector_y[gid*ncols+gid2] = sum;
+    }""")
+    ctx.save_for_backward(input, weight)
+
+    # (isize,msize) x (msize,osize) = (isize,osize)
+    matmul(ctx.cl_queue, [isize, osize], None,
+      weight.datat.cl, weight.idxst.cl, weight.nnzst.cl, np.uint32(msize), np.uint32(weight.ellwt), input.cl, ret.data.cl)
+
+    # resa = np.zeros(isize,osize).astype(np.float32)
+    # cl.enqueue_copy(ctx.cl_queue, resa, ret.cl)
+    # return ret.data
+    # return trans_axis(ctx, ret.data, (1,0))   # print("RES:", resa)
+    return ret.data
+
+  def backward(ctx, grad_output):
+    input, weight = ctx.saved_tensors
+    # print("GO:", weight.ellwt)
+    # print('IN', DenseTensor(input).cpu().data)
+    isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
+
+    grad_input = DenseTensor(np.zeros(input.shape))
+    grad_weight = DenseTensor(np.zeros(weight.shape))
+
+    matmul2 = clbuild(ctx.cl_ctx, "matmul2", """
+    // Every global_id_0 works on a row
+    __kernel void matmul2(__global  float* matData,     // INPUT MATRIX DATA
                             __global  uint*  colIdx,
                             __global  uint*  rowNnz,
                             uint   ellwidth,
@@ -380,29 +417,9 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
       vector_y[gid*ncols+gid2] = sum;
     }""")
-    ctx.save_for_backward(input, weight, matmul)
-
-    # (isize,msize) x (msize,osize) = (isize,osize)
-    matmul(ctx.cl_queue, [isize, osize], None,
-      weight.data.cl, weight.idxs.cl, weight.nnzs.cl, np.uint32(weight.ellw), input.cl, ret.data.cl)
-
-    # resa = np.zeros(isize,osize).astype(np.float32)
-    # cl.enqueue_copy(ctx.cl_queue, resa, ret.cl)
-    # print("RES:", resa)
-    return ret.data
-
-  def backward(ctx, grad_output):
-    # print("GO:", DenseTensor(grad_output).cpu().data)
-    input, weight, matmul = ctx.saved_tensors
-    print("MATMUL0:", grad_output.shape, input, weight, ctx)
-    # print('IN', DenseTensor(input).cpu().data)
-    isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
-
-    grad_input = DenseTensor(np.zeros(input.shape))
-    grad_weight = DenseTensor(np.zeros(weight.shape))
 
     # (isize,osize) x (msize,osize) = (isize,msize)
-    matmul(ctx.cl_queue, [isize, msize], None,
+    matmul2(ctx.cl_queue, [isize, msize], None,
       weight.datat.cl, weight.idxst.cl, weight.nnzst.cl, np.uint32(weight.ellwt), grad_output.cl, grad_input.data.cl)
 
     matmul0 = clbuild(ctx.cl_ctx, "matmul0", """
@@ -419,7 +436,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
 
       float ret = 0.0;
       for (int i = 0; i < msize; i++) {
-        ret += x[gidx*msize+i]*y[i*osize+gidy];
+        ret += x[gidx*msize+i]*y[osize*gidy+i];
         //if (gidx==0 && gidy==0)
         //  printf("\\nmult: %.2f x %.2f - %.2f", x[gidx*msize+i],y[i*msize+gidy], ret);
       }
@@ -435,11 +452,31 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     msize = grad_output.shape[-1]
     osize = input.shape[-1]
 
-    matmul0(ctx.cl_queue, [isize, input.shape[-2]], None,
+    matmul0(ctx.cl_queue, [isize, osize], None,
       input.cl, grad_output.cl, grad_weight.data.cl, np.uint32(msize))
 
     # print('W', grad_weight.cpu().data)
+    # print('I', grad_input.cpu().data)
     return grad_weight, grad_input
+
+
+def trans_axis(ctx, inp, order=(1,0)):
+  osize = np.array(inp.shape)[list(order)]
+  ret = buffer_new(ctx, osize)
+  trans = clbuild(ctx.cl_ctx, "trans", """
+    __kernel void trans(__global float *a_g,
+                        __global float *res_g,
+                        uint width) {
+      int row = get_global_id(0);
+      for(uint i=0; i<width; i++) {
+        //printf("\\nSET:%i-%i", row, i);
+        res_g[row*width+i] = 0;
+      }
+    }""")
+  trans(ctx.cl_queue, [osize[1]], None, inp.cl, ret.cl, np.uint32(osize[0]))
+
+  print("PERM RET:", ret)
+  return ret
 
 
 class Conv2D(SparseFunction):

@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import unittest
+import time
 from tinygrad.densetensor import DenseTensor, DEFAULT_DEVICE
 from tinygrad.sparsetensor import SparseTensor
 from extra.gradcheck import numerical_jacobian, jacobian, gradcheck
@@ -12,15 +13,98 @@ W_init = np.random.randn(3,3).astype(np.float32)
 m_init = np.random.randn(1,3).astype(np.float32)
 
 class TestTinygrad(unittest.TestCase):
+  def test_forward_pass_dense(self):
+    def test_tinygrad():
+      x = DenseTensor(x_init)
+      W = DenseTensor(W_init)
+      m = DenseTensor(m_init)
+      out = x.dot(W).relu().sum()
+      # out = out.logsoftmax()
+      # out = out.mul(m).add(m).sum()
+      # out.backward()
+      return out.cpu().data
 
-  def test_backward_pass(self):
+    def test_pytorch():
+      x = torch.tensor(x_init, requires_grad=True)
+      W = torch.tensor(W_init, requires_grad=True)
+      m = torch.tensor(m_init)
+      out = x.matmul(W).relu().sum()
+      # out = torch.nn.functional.log_softmax(out, dim=1)
+      # out = out.mul(m).add(m).sum()
+      # out.backward()
+      return out.detach().numpy()
+
+  def test_backward_pass_dense(self):
+    def test_tinygrad():
+      x = DenseTensor(x_init)
+      W = DenseTensor(W_init)
+      m = DenseTensor(m_init)
+      out = x.dot(W).relu().sum()
+      # out = out.logsoftmax()
+      # out = out.mul(m).add(m).sum()
+      out.backward()
+      return out.cpu().data
+
+    def test_pytorch():
+      x = torch.tensor(x_init, requires_grad=True)
+      W = torch.tensor(W_init, requires_grad=True)
+      m = torch.tensor(m_init)
+      out = x.matmul(W).relu().sum()
+      # out = torch.nn.functional.log_softmax(out, dim=1)
+      # out = out.mul(m).add(m).sum()
+      out.backward()
+      return out.detach().numpy()
+
+  def test_forward_pass2(self):
     def test_tinygrad():
       x = SparseTensor(x_init)
       W = DenseTensor(W_init)
       m = DenseTensor(m_init)
-      out = x.dot(W).relu()
-      out = out.logsoftmax()
-      out = out.mul(m).add(m).sum()
+      out = x.dot(W).relu().sum()
+      # out = out.logsoftmax()
+      # out = out.mul(m).add(m).sum()
+      # out.backward()
+      return out.cpu().data
+
+    def test_pytorch():
+      x = torch.tensor(x_init, requires_grad=True)
+      W = torch.tensor(W_init, requires_grad=True)
+      m = torch.tensor(m_init)
+      out = x.matmul(W).relu().sum()
+      # out = torch.nn.functional.log_softmax(out, dim=1)
+      # out = out.mul(m).add(m).sum()
+      # out.backward()
+      return out.detach().numpy()
+
+  def test_forward_pass(self):
+    def test_tinygrad():
+      x = DenseTensor(x_init)
+      W = SparseTensor(W_init)
+      m = DenseTensor(m_init)
+      out = x.dot(W).relu().sum()
+      # out = out.logsoftmax()
+      # out = out.mul(m).add(m).sum()
+      # out.backward()
+      return out.cpu().data
+
+    def test_pytorch():
+      x = torch.tensor(x_init, requires_grad=True)
+      W = torch.tensor(W_init, requires_grad=True)
+      m = torch.tensor(m_init)
+      out = x.matmul(W).relu().sum()
+      # out = torch.nn.functional.log_softmax(out, dim=1)
+      # out = out.mul(m).add(m).sum()
+      # out.backward()
+      return out.detach().numpy()
+
+  def test_backward_pass(self):
+    def test_tinygrad():
+      x = DenseTensor(x_init)
+      W = SparseTensor(W_init)
+      m = DenseTensor(m_init)
+      out = x.dot(W).tanh().sum()
+      # out = out.logsoftmax()
+      # out = out.mul(m).add(m).sum()
       out.backward()
       return out.cpu().data, x.grad.cpu().data, W.grad.cpu().data
 
@@ -28,9 +112,9 @@ class TestTinygrad(unittest.TestCase):
       x = torch.tensor(x_init, requires_grad=True)
       W = torch.tensor(W_init, requires_grad=True)
       m = torch.tensor(m_init)
-      out = x.matmul(W).relu()
-      out = torch.nn.functional.log_softmax(out, dim=1)
-      out = out.mul(m).add(m).sum()
+      out = x.matmul(W).tanh().sum()
+      # out = torch.nn.functional.log_softmax(out, dim=1)
+      # out = out.mul(m).add(m).sum()
       out.backward()
       return out.detach().numpy(), x.grad, W.grad
 

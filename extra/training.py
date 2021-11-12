@@ -25,10 +25,11 @@ def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categoric
 
     # network
     out = model.forward(x)
-
     loss = lossfn(out, y)
+
     optim.zero_grad()
     loss.backward()
+    # print('MODEL:', model.parameters())
     optim.step()
 
     cat = np.argmax(out.cpu().data, axis=-1)
