@@ -340,7 +340,7 @@ class SparseTensor(Tensor):
       uint baseidxd = gid*awidth;
 
       for (uint i=0; i<awidth; i++) {
-        float addval = vector_x[baseidxd+i];
+        float addval = vector_x[baseidxd+i] * lr;
         //if (gid==1)
         //  printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[baseidxs+i]);
         if (addval == 0) {
@@ -406,7 +406,7 @@ class SparseTensor(Tensor):
         if (nnz > ellwidth)
             break;
         uint baseidxd = i*ncols+gid;
-        float addval = vector_x[baseidxd];
+        float addval = vector_x[baseidxd]*lr;
         //if (gid==1)
         //  printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[baseidxs+i]);
         if (addval == 0) {
