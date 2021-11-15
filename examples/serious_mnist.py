@@ -20,9 +20,9 @@ class MLP:
   def __init__(self):
     # w_init = np.random.randn(784,10).astype(np.float32) / 1000
     # w_init2 = np.random.randn(BS,10).astype(np.float32) / 1000
-    self.weight1 = SparseTensor.uniform(784,10, randsparsity=0.5)
+    # self.weight1 = DenseTensor.uniform(784,10)
     # self.weight2 = SparseTensor.uniform(10,10)
-    # self.weight1 = SparseTensor.uniform(784,784, randsparsity=0.5)
+    self.weight1 = SparseTensor.uniform(784,10)
     # self.weight2 = SparseTensor.uniform(128,10)
     # self.weight2 = SparseTensor(w_init2)
 
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     [x.gpu_() for x in params]
 
   for lr, epochs in zip(lrs, epochss):
-    optimizer = optim.SGD(model.parameters(), lr=.000001)
+    optimizer = optim.SGD(model.parameters(), lr=.0001)
     for epoch in range(1,epochs+1):
       #first epoch without augmentation
       X_aug = X_train #if epoch == 1 else augment_img(X_train)

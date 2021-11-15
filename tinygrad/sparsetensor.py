@@ -293,21 +293,21 @@ class SparseTensor(Tensor):
     ctx = cl_ctx
 
     if dual:
-      data, cols, nnzs, ellw, shape = self.datat, self.idxst, self.nnzst, self.ellwt, self.shape
+      data, cols, nnzs, ellw, shape = self.datat, self.idxst, self.nnzst, self.ellwt, np.array(self.shape).T
     else:
       data, cols, nnzs, ellw, shape = self.data, self.idxs, self.nnzs, self.ellw, self.shape
 
-    dim = self.shape[0]*ellw
+    dim = shape[0]*ellw
     newdata= np.zeros(dim).astype(np.float32)
     cl.enqueue_copy(cl_queue, newdata, data.cl)
 
     newcols= np.zeros(dim).astype(np.uint32)
     cl.enqueue_copy(cl_queue, newcols, cols.cl)
 
-    newnnzs= np.zeros(self.shape[0]).astype(np.uint32)
+    newnnzs= np.zeros(shape[0]).astype(np.uint32)
     cl.enqueue_copy(cl_queue, newnnzs, nnzs.cl)
 
-    out = np.zeros(self.shape)
+    out = np.zeros(shape)
     for row in range(shape[0]):
         # print('nnzs:', newnnzs[row])
         for icol in range(int(newnnzs[row])):
@@ -322,8 +322,7 @@ class SparseTensor(Tensor):
     ctx = cl_ctx
     bs = grad[1].shape[0]
 
-    adddense = cl.Program(ctx,
-     """
+    adddense = cl.Program(ctx,"""
     // Every global_id_0 works on a row
     __kernel void adddense(__global  float* matData,     // INPUT MATRIX DATA
                             __global  uint*  colIdx,
@@ -348,11 +347,18 @@ class SparseTensor(Tensor):
           continue;
         }
         if (i == colIdx[baseidxs+i]) {
-          matData[baseidxs+i] += addval*lr;
-          //printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
+          matData[baseidxs+i] += addval;
         } else {
           if (rowNnz[gid] >= ellwidth) {
             break;
+          }
+          if (i > colIdx[baseidxs+i]) {
+            rowNnz[gid] += 1;
+            //if (gid==1)
+            //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
+            matData[baseidxs+i] = addval;
+            colIdx[baseidxs+i] = i;
+            continue;
           }
           for (uint j=nnz; j>i; j--) {
             //printf("\\nMOVE:%.2f", matData[baseidx+j-1]);
@@ -363,8 +369,10 @@ class SparseTensor(Tensor):
           nnz = rowNnz[gid];
           //if (gid==1)
           //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-          matData[baseidxs+i] = addval*lr;
+          matData[baseidxs+i] = addval;
           colIdx[baseidxs+i] = i;
+          if (nnz >= ellwidth)
+            break;
         }
       }
     }""").build().__getattr__('adddense')
@@ -379,7 +387,7 @@ class SparseTensor(Tensor):
       self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw), np.uint32(grad.shape[1]), grad.data.cl)
 
     adddenset = cl.Program(ctx,"""
-     // Every global_id_0 works on a row
+    // Every global_id_0 works on a row
     __kernel void adddenset(__global  float* matData,     // INPUT MATRIX DATA
                             __global  uint*  colIdx,
                             __global  uint*  rowNnz,
@@ -395,17 +403,29 @@ class SparseTensor(Tensor):
       uint baseidxs = gid*ellwidth;
 
       for (uint i=0; i<aheight; i++) {
+        if (nnz > ellwidth)
+            break;
         uint baseidxd = i*ncols+gid;
         float addval = vector_x[baseidxd];
+        //if (gid==1)
+        //  printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[baseidxs+i]);
         if (addval == 0) {
           continue;
         }
         if (i == colIdx[baseidxs+i]) {
           //printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-          matData[baseidxs+i] += addval*lr;
+          matData[baseidxs+i] += addval;
         } else {
-          if (rowNnz[gid] == ellwidth) {
+          if (rowNnz[gid] >= ellwidth) {
             break;
+          }
+          if (i > colIdx[baseidxs+i]) {
+            rowNnz[gid] += 1;
+            //if (gid==1)
+            //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
+            matData[baseidxs+i] = addval;
+            colIdx[baseidxs+i] = i;
+            continue;
           }
           for (uint j=nnz; j>i; j--) {
             //printf("\\nMOVE:%.2f", matData[baseidx+j-1]);
@@ -416,7 +436,7 @@ class SparseTensor(Tensor):
           nnz = rowNnz[gid];
           //if (gid==1)
           //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-          matData[baseidxs+i] = addval*lr;
+          matData[baseidxs+i] = addval;
           colIdx[baseidxs+i] = i;
         }
       }
