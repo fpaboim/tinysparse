@@ -20,7 +20,7 @@ class MLP:
   def __init__(self):
     # w_init = np.random.randn(784,10).astype(np.float32) / 1000
     # w_init2 = np.random.randn(BS,10).astype(np.float32) / 1000
-    self.weight1 = SparseTensor.uniform(784,10, randsparsity=0.9)
+    self.weight1 = SparseTensor.uniform(784,10, randsparsity=0.5)
     # self.weight2 = SparseTensor.uniform(10,10)
     # self.weight1 = SparseTensor.uniform(784,784, randsparsity=0.5)
     # self.weight2 = SparseTensor.uniform(128,10)
