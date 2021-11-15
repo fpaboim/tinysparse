@@ -77,8 +77,8 @@ class DenseTensor(Tensor):
   training = True
   ops = defaultdict(dict)
 
-  def __init__(self, data, device=DEFAULT_DEVICE, requires_grad=True):
-    self.device, self.data = device, self._move_data(data, device, np.float32)
+  def __init__(self, data, device=DEFAULT_DEVICE, requires_grad=True, dtype=np.float32):
+    self.device, self.data = device, self._move_data(data, device, dtype)
 
     self.grad, self.requires_grad = None, requires_grad
 
@@ -163,7 +163,7 @@ class DenseTensor(Tensor):
         #   print("ERR:", e)
         #   pass
         if g is not None:
-          print('T/G:', t,g,t.shape, g.shape)
+          # print('T/G:', t,g,t.shape, g.shape)
           # if not (not isinstance(t, DenseTensor)) and (not isinstance(t,GPUBuffer)):
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"
@@ -173,8 +173,6 @@ class DenseTensor(Tensor):
           else:
             gt = DenseTensor(g, device=self.device, requires_grad=False)
           t.grad = gt if t.grad is None else (t.grad + gt)
-          if t.is_sparse():
-            print('T:', t)
           # try:
           #   if t.is_sparse():
           #     t._ctx = t0._ctx

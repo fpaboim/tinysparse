@@ -400,7 +400,6 @@ class Matmul(Function):
     return ret
 
   def backward(ctx, grad_output):
-    # print("GO:", DenseTensor(grad_output).cpu().data)
     input, weight, matmul, cnt = ctx.saved_tensors
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
 
@@ -418,7 +417,8 @@ class Matmul(Function):
       i32(1), msize, isize, i32(1), osize, osize)
 
     # print('IN', DenseTensor(input).cpu().data)
-    # print('W', DenseTensor(grad_weight).cpu().data)
+    # print('GO', DenseTensor(grad_output).cpu().data)
+    # print('GIB', DenseTensor(grad_input).cpu().data)
     return grad_input, grad_weight
 
 class Conv2D(Function):

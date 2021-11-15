@@ -324,16 +324,14 @@ class Slice(SparseFunction):
 # ************* processing ops *************
 
 class Matmul(SparseFunction): # input and weights are swapped, legacy..
-  def forward(ctx, input, weight):
-    print("WEIGHT/input:", weight, input)
+  def forward(ctx, weight, input):
+    # print("WEIGHT/input:", weight, input)
     # print(input.shape, weight.shape)
     # assert weight.shape[-2] == input.shape[-1]
 
-    assert input.shape[-1] == weight.shape[-2]
-    cnt = np.prod(input.shape[0:-2]) if len(input.shape) > 2 else 1
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
-    outshape = (weight.shape[1], osize)
-    # print("OUT:", outshape)
+    outshape = np.array([input.shape[-2], weight.shape[-1]])
+    # print("OUT:", outshape, isize, msize, osize)
     outdata = np.zeros(outshape)
     ret = DenseTensor(outdata)
     # ret = buffer_new(ctx.cl_ctx, outshape, zero=True)
@@ -341,39 +339,40 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     # print("RET:", input)
 
     matmul = clbuild(ctx.cl_ctx, "matmul", """
-    // Every global_id_0 works on a row
+    // DENSE x SPARSE
     __kernel void matmul(__global  float* matData,     // INPUT MATRIX DATA
                             __global  uint*  colIdx,
                             __global  uint*  rowNnz,
-                            uint   mwidth,
                             uint   ellwidth,
+                            uint   mwidth,
+                            uint   ncols,
                             __global  float* vector_x,    // INPUT
                             __global  float* vector_y    // OUTPUT
                             ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
       uint nrows = get_global_size(0);
-      uint gid2 = get_global_id(1);
-      uint ncols = get_global_size(1);
 
-      uint nnz    = rowNnz[gid];
-      float sum = 0;
-      for (uint i = 0; i < nnz; i++) {
-        uint index   = (gid * ellwidth) + i;
-        uint col     = colIdx[index];
-        float aval  = matData[index];
-        float xval  = vector_x[gid2*mwidth+col];
-        sum  += aval * xval;
-        //if (gid==1 && gid2==0)
-        //  printf("aval, xval: %.2f,%.2f - %.2f: (%i,%i) \\n", aval, xval, sum, col, index);
+      for (uint gid2 = 0; gid2 < ncols; gid2++) {
+        uint nnz = rowNnz[gid2];
+        float sum = 0;
+        for (uint i = 0; i < nnz; i++) {
+          uint index   = (gid2 * ellwidth) + i;
+          uint col     = colIdx[index];
+          float aval  = matData[index];
+          float xval  = vector_x[gid*mwidth+col];
+          sum  += aval * xval;
+          //if (gid==0 && gid2==0)
+          //  printf("aval, xval: %.2f,%.2f - %.2f: (%i,%i) \\n", aval, xval, sum, col, index);
+        }
+        //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
+        vector_y[gid*ncols+gid2] = sum;
       }
-      //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
-      vector_y[gid*ncols+gid2] = sum;
     }""")
     ctx.save_for_backward(input, weight)
 
     # (isize,msize) x (msize,osize) = (isize,osize)
-    matmul(ctx.cl_queue, [isize, osize], None,
-      weight.datat.cl, weight.idxst.cl, weight.nnzst.cl, np.uint32(msize), np.uint32(weight.ellwt), input.cl, ret.data.cl)
+    matmul(ctx.cl_queue, [outshape.T[0]], None,
+      weight.datat.cl, weight.idxst.cl, weight.nnzst.cl, np.uint32(weight.ellwt), np.uint32(msize), np.uint32(outshape.T[1]), input.cl, ret.data.cl)
 
     # resa = np.zeros(isize,osize).astype(np.float32)
     # cl.enqueue_copy(ctx.cl_queue, resa, ret.cl)
@@ -383,68 +382,75 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
 
   def backward(ctx, grad_output):
     input, weight = ctx.saved_tensors
-    # print("GO:", weight.ellwt)
-    # print('IN', DenseTensor(input).cpu().data)
+    # print('IN', DenseTensor(input).cpu().data, grad_output)
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
 
     grad_input = DenseTensor(np.zeros(input.shape))
     grad_weight = DenseTensor(np.zeros(weight.shape))
 
+    # print("OUTSHAPE:", weight.shape, input.shape[0], isize, msize, weight.ellwt)
+
     matmul2 = clbuild(ctx.cl_ctx, "matmul2", """
-    // Every global_id_0 works on a row
+    // DENSE x SPARSE
     __kernel void matmul2(__global  float* matData,     // INPUT MATRIX DATA
                             __global  uint*  colIdx,
                             __global  uint*  rowNnz,
                             uint   ellwidth,
+                            uint   mwidth,
+                            uint   ncols,
                             __global  float* vector_x,    // INPUT
                             __global  float* vector_y    // OUTPUT
                             ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
       uint nrows = get_global_size(0);
-      uint gid2 = get_global_id(1);
-      uint ncols = get_global_size(1);
 
       uint nnz    = rowNnz[gid];
-      float sum = 0;
-      for (uint i = 0; i < nnz; i++) {
-        uint index   = (gid * ellwidth) + i;
-        uint col     = colIdx[index];
-        float aval  = matData[index];
-        float xval  = vector_x[col*ncols+gid2];
-        //if (gid==0 && gid2==2)
-        //  printf("aval, xval: %.2f,%.2f: (%i,%i) \\n", aval, xval, col, index);
-        sum  += aval * xval;
+      for (uint gid2 = 0; gid2 < ncols; gid2++) {
+        float sum = 0;
+        for (uint i = 0; i < nnz; i++) {
+          uint index   = (gid2 * ellwidth) + i;
+          uint col     = colIdx[index];
+          float aval  = matData[index];
+          float xval  = vector_x[gid*mwidth+col];
+          sum  += aval * xval;
+          //if (gid==0 && gid2==1)
+          //  printf("aval, xval: %.2f,%.2f - %.2f: (%i,%i) \\n", aval, xval, sum, col, index);
+        }
+        //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
+        vector_y[gid*ncols+gid2] = sum;
       }
-      //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
-      vector_y[gid*ncols+gid2] = sum;
     }""")
 
     # (isize,osize) x (msize,osize) = (isize,msize)
-    matmul2(ctx.cl_queue, [isize, msize], None,
-      weight.datat.cl, weight.idxst.cl, weight.nnzst.cl, np.uint32(weight.ellwt), grad_output.cl, grad_input.data.cl)
+    matmul2(ctx.cl_queue, [isize], None,
+      weight.data.cl, weight.idxs.cl, weight.nnzs.cl, np.uint32(weight.ellw), np.uint32(msize), np.uint32(osize), grad_output.cl, grad_input.data.cl)
 
     matmul0 = clbuild(ctx.cl_ctx, "matmul0", """
-    // multilplies x by y WITH Y TRANSPOSED INDEXING
+    // multilplies x TRANSPOSED by y (dense-dense)
     __kernel void matmul0(__global  float* x,     // INPUT MATRIX DATA
                           __global  float* y,    // INPUT
                           __global  float* res,    // INPUT
-                          uint msize
+                          uint msize,
+                          uint isize
                           ) { // LOCAL SHARED BUFFER
-      uint isize = get_global_size(0);
-      uint osize = get_global_size(1);
-      int gidx = get_global_id(0); // col
-      int gidy = get_global_id(1); // row
+      uint osize = get_global_size(0);
+      int gidy = get_global_id(0); // row
 
-      float ret = 0.0;
-      for (int i = 0; i < msize; i++) {
-        ret += x[gidx*msize+i]*y[osize*gidy+i];
-        //if (gidx==0 && gidy==0)
-        //  printf("\\nmult: %.2f x %.2f - %.2f", x[gidx*msize+i],y[i*msize+gidy], ret);
+      for (uint gidx = 0; gidx < isize; gidx++) {
+        float ret = 0.0;
+        for (uint i = 0; i < msize; i++) {
+          uint xidx = i*isize+gidx;
+          float xval = x[xidx];
+          uint yidx = osize*i+gidy;
+          float yval = y[yidx];
+          ret += xval*yval;
+          //if (gidx==0 && gidy==0)
+          //  printf("\\nmult: %.2f x %.2f - %.2f  -- %i/%i", xval, yval, ret, xidx, yidx);
+        }
+        //if (gidx==0&&gidy==0)
+        //  printf("\\nsum:%.2f", ret);
+        res[gidx * osize + gidy] = ret;
       }
-
-      //if (gidx==0&&gidy==0)
-      //  printf("\\nsum:%.2f", ret);
-      res[gidy * osize + gidx] = ret;
     }""")
 
 
@@ -453,11 +459,14 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     msize = grad_output.shape[-1]
     osize = input.shape[-1]
 
-    matmul0(ctx.cl_queue, [isize, osize], None,
-      input.cl, grad_output.cl, grad_weight.data.cl, np.uint32(msize))
+    # print('IN', DenseTensor(input).cpu().data, weight.shape, input.shape[0])
+    # print('GO', DenseTensor(grad_output).cpu().data)
+    # print('GIB', grad_input.cpu().data)
 
-    # print('W', grad_weight.cpu().data)
-    # print('I', grad_input.cpu().data)
+    matmul0(ctx.cl_queue, [weight.shape[1]], None,
+      input.cl, grad_output.cl, grad_weight.data.cl, np.uint32(input.shape[0]), np.uint32(weight.shape[0]))
+
+    # print('OUT', weight.shape)
     return grad_weight, grad_input
 
 
