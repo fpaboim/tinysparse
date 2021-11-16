@@ -453,7 +453,6 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       }
     }""")
 
-
     # Weight update
     isize = grad_output.shape[-2]
     msize = grad_output.shape[-1]
