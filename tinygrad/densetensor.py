@@ -147,7 +147,7 @@ class DenseTensor(Tensor):
     for t0 in reversed(self.deepwalk()):
       assert (t0.grad is not None)
       with ProfileOp(t0._ctx.__class__.__name__, [t0.grad], backward=True) as po:
-        # print('t0:', t0, t0.grad.cpu().data)
+        # print('t0:', t0, t0._ctx.__class__.__name__, t0.grad.cpu().data)
         grads = t0._ctx.backward(t0._ctx, t0.grad.data)
       if len(t0._ctx.parents) == 1:
         grads = [grads]
@@ -167,11 +167,12 @@ class DenseTensor(Tensor):
           # if not (not isinstance(t, DenseTensor)) and (not isinstance(t,GPUBuffer)):
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"
-          if isinstance(g, DenseTensor):
-            # print("DENSETENSOR")
-            gt = g
-          else:
-            gt = DenseTensor(g, device=self.device, requires_grad=False)
+          gt = g
+          # if isinstance(g, DenseTensor):
+          #   # print("DENSETENSOR")
+          #   gt = g
+          # else:
+          #   gt = DenseTensor(g, device=self.device, requires_grad=False)
           t.grad = gt if t.grad is None else (t.grad + gt)
           # try:
           #   if t.is_sparse():

@@ -4,6 +4,13 @@ import numpy as np
 from .sparsetensor import SparseFunction, topk, SparseTensor
 from .densetensor import GPUBuffer, DenseTensor
 
+class GradData:
+  def __init__(self, data, xidx, yidx, shape):
+    self.data = data
+    self.xidx = xidx
+    self.yidx = yidx
+    self.shape = shape
+
 def buffer_new(ctx, shape, zero=False, dtype=np.float32):
   return GPUBuffer(shape, hostbuf=None if not zero else np.zeros(shape, dtype=dtype))
 
@@ -386,7 +393,6 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
 
     grad_input = DenseTensor(np.zeros(input.shape))
-    grad_weight = DenseTensor(np.zeros(weight.shape))
 
     # print("OUTSHAPE:", weight.shape, input.shape[0], isize, msize, weight.ellwt)
 
@@ -425,48 +431,143 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     matmul2(ctx.cl_queue, [isize], None,
       weight.data.cl, weight.idxs.cl, weight.nnzs.cl, np.uint32(weight.ellw), np.uint32(msize), np.uint32(osize), grad_output.cl, grad_input.data.cl)
 
-    matmul0 = clbuild(ctx.cl_ctx, "matmul0", """
-    // multilplies x TRANSPOSED by y (dense-dense)
-    __kernel void matmul0(__global  float* x,     // INPUT MATRIX DATA
-                          __global  float* y,    // INPUT
-                          __global  float* res,    // INPUT
-                          uint msize,
-                          uint isize
-                          ) { // LOCAL SHARED BUFFER
-      uint osize = get_global_size(0);
-      int gidy = get_global_id(0); // row
+    genwupdate4 = clbuild(ctx.cl_ctx, "genwupdate4", """
+    // sorts x and y in ascending order and returns sorted indices
+    __kernel void genwupdate4(__global  float* x,     // INPUT MATRIX DATA
+                              __global  float* y,    // INPUT
+                              __global  float* xsum,    // INPUT
+                              __global  float* ysum,    // INPUT
+                              uint isize,
+                              uint msize,
+                              uint osize,
+                              uint topk,
+                              __global  uint*  xoutidx,
+                              __global  uint*  youtidx,
+                              __global  float* matData,     // INPUT MATRIX DATA
+                              __global  uint*  colIdx,
+                              __global  uint*  rowNnz
+                              ) {
+      uint gid = get_global_id(0);
 
-      for (uint gidx = 0; gidx < isize; gidx++) {
-        float ret = 0.0;
-        for (uint i = 0; i < msize; i++) {
-          uint xidx = i*isize+gidx;
-          float xval = x[xidx];
-          uint yidx = osize*i+gidy;
-          float yval = y[yidx];
-          ret += xval*yval;
-          //if (gidx==0 && gidy==0)
-          //  printf("\\nmult: %.2f x %.2f - %.2f  -- %i/%i", xval, yval, ret, xidx, yidx);
+      // get for a: sum axis0  b: sum axis1 then get topk
+      ///////////////////////////////////////////////////
+      if (gid < isize) {
+        xsum[gid] = 0;
+        for (uint i=0; i<msize; i++) {
+          float val = x[i*isize+gid];
+          //if (gid == 0) {
+          //  printf("\\nADD VALx: %.2f - %i", val, i*msize+gid);
+          //}
+          xsum[gid] += val;
         }
-        //if (gidx==0&&gidy==0)
-        //  printf("\\nsum:%.2f", ret);
-        res[gidx * osize + gidy] = ret;
+
+        float valx = xsum[gid];
+        uint posx = 0;
+        for (uint i = 0; i < isize; i++) {
+          float tempval = xsum[i];
+          bool larger = tempval > valx;
+          posx += (larger)?1:0;
+        }
+        if (posx < topk) {
+          xoutidx[posx] = gid;
+        }
+      }
+
+      if (gid < osize) {
+        ysum[gid] = 0;
+        for (uint i=0; i<msize; i++) {
+          float val = y[i*osize+gid];
+          //if (gid == 0) {
+          //  printf("\\nADD VALx: %.2f - %i", val, gid*osize+i);
+          //}
+          ysum[gid] += val;
+        }
+
+        float valy = ysum[gid];
+        uint posy = 0;
+        for (uint i = 0; i < osize; i++) {
+          float tempval = ysum[i];
+          bool larger = tempval > valy;
+          posy += (larger)?1:0;
+        }
+
+        if (posy < topk) {
+          youtidx[posy] = gid;
+        }
+      }
+
+      if (gid < topk) {
+        float valx = xoutidx[gid];
+        uint posx = 0;
+        for (uint i = 0; i < topk; i++) {
+          float tempval = xoutidx[i];
+          bool larger = tempval < valx;
+          posx += (larger)?1:0;
+        }
+        xoutidx[posx] = valx;
+
+        float valy = youtidx[gid];
+        uint posy = 0;
+        for (uint i = 0; i < topk; i++) {
+          float tempval = youtidx[i];
+          bool larger = tempval < valy;
+          posy += (larger)?1:0;
+        }
+        youtidx[posy] = valy;
+      }
+
+      // only calc matrix multiplications for used grads
+      ///////////////////////////////////////////////////
+      for (uint i=0; i<topk; i++) {
+        matData[gid*topk+i] = 0;
+        colIdx[gid*topk+i] = 0;
+      }
+      rowNnz[gid] = 0;
+
+      if (gid < topk) {
+        uint idxx = xoutidx[gid];
+        for (uint j=0; j<topk; j++) {
+          uint idxy = youtidx[j];
+          printf("IDXX:%i  IDXY:%i", idxx, idxy);
+          for (uint k=0; k<msize; k++) {
+            uint xidx2 = isize*k+idxx;
+            uint yidx2 = osize*k+idxy;
+            uint colidx = idxy;
+            matData[idxx*topk+j] += x[xidx2] * y[yidx2];
+            colIdx[idxx*topk+j] = idxy;
+            if (gid == 0)
+              printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
+          }
+          rowNnz[idxx] += 1;
+        }
       }
     }""")
 
     # Weight update
-    isize = grad_output.shape[-2]
-    msize = grad_output.shape[-1]
-    osize = input.shape[-1]
+    isize = weight.shape[0]
+    msize = grad_output.shape[0]
+    osize = weight.shape[1]
+
+    x_sum_buf = DenseTensor(np.zeros(weight.shape[0]))
+    y_sum_buf = DenseTensor(np.zeros(weight.shape[1]))
+    sdata_buf  = DenseTensor(np.zeros(weight.shape[0]*topk))
+    sidxs_buf  = DenseTensor(np.zeros(weight.shape[0]*topk), dtype=np.uint32)
+    snnzs_buf  = DenseTensor(np.zeros(weight.shape[0]*topk), dtype=np.uint32)
+    sdatat_buf  = DenseTensor(np.zeros(weight.shape[0]*topk))
+    sidxst_buf  = DenseTensor(np.zeros(weight.shape[0]*topk), dtype=np.uint32)
+    snnzst_buf  = DenseTensor(np.zeros(weight.shape[0]*topk), dtype=np.uint32)
+    x_idx_buf = DenseTensor(np.zeros(topk), dtype=np.uint32)
+    y_idx_buf = DenseTensor(np.zeros(topk), dtype=np.uint32)
 
     # print('IN', DenseTensor(input).cpu().data, weight.shape, input.shape[0])
     # print('GO', DenseTensor(grad_output).cpu().data)
     # print('GIB', grad_input.cpu().data)
 
-    matmul0(ctx.cl_queue, [weight.shape[1]], None,
-      input.cl, grad_output.cl, grad_weight.data.cl, np.uint32(input.shape[0]), np.uint32(weight.shape[0]))
+    genwupdate4(ctx.cl_queue, [max(weight.shape[0],weight.shape[1])], None,
+      input.cl, grad_output.cl, x_sum_buf.data.cl, y_sum_buf.data.cl, np.uint32(isize), np.uint32(msize),np.uint32(osize), np.uint32(topk), x_idx_buf, y_idx_buf, sdata_buf, sidxs_buf, snnzs_buf)
 
-    # print('OUT', weight.shape)
-    return grad_weight, grad_input
+    w_grad = GradData(x_cp_buf, x_idx_buf, y_idx_buf, weight.shape)
+    return w_grad, grad_input
 
 
 def trans_axis(ctx, inp, order=(1,0)):
