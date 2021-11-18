@@ -332,7 +332,7 @@ class Slice(SparseFunction):
 
 class Matmul(SparseFunction): # input and weights are swapped, legacy..
   def forward(ctx, weight, input):
-    # print("WEIGHT/input:", weight, input)
+    print("WEIGHT/input:", weight, input)
     # print(input.shape, weight.shape)
     # assert weight.shape[-2] == input.shape[-1]
 
@@ -375,7 +375,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
         vector_y[gid*ncols+gid2] = sum;
       }
     }""")
-    ctx.save_for_backward(input, weight)
+    ctx.save_for_backward(input, weight, m)
 
     # (isize,msize) x (msize,osize) = (isize,osize)
     matmul(ctx.cl_queue, [outshape.T[0]], None,
@@ -393,6 +393,9 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
 
     grad_input = DenseTensor(np.zeros(input.shape))
+
+    if not self.m
+    m = DenseTensor(np.zeros(grad_output.shape))
 
     # print("OUTSHAPE:", weight.shape, input.shape[0], isize, msize, weight.ellwt)
 
@@ -432,7 +435,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       weight.data.cl, weight.idxs.cl, weight.nnzs.cl, np.uint32(weight.ellw), np.uint32(msize), np.uint32(osize), grad_output.cl, grad_input.data.cl)
 
     genwupdate4 = clbuild(ctx.cl_ctx, "genwupdate4", """
-    // gets topk gradients (topk x topk) then selects from matmul result
+    // sorts x and y in ascending order and returns sorted indices
     __kernel void genwupdate4(__global  float* x,     // INPUT MATRIX DATA
                               __global  float* y,    // INPUT
                               __global  float* xsum,    // INPUT

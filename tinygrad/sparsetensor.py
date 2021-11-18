@@ -87,6 +87,7 @@ class SparseTensor(Tensor):
       self.ellwt = ellwt
 
     self.grad, self.requires_grad = None, requires_grad
+    self.m = None # m matrix for memoized backprop (meprop alt.)
 
     # internal variables used for autograd graph construction
     self._ctx = ctx
