@@ -467,8 +467,8 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
         float valx = xsum[gid];
         uint posx = 0;
         for (uint i = 0; i < isize; i++) {
-          float tempval = xsum[i];
-          bool larger = tempval > valx;
+          float tempval = fabs(xsum[i]);
+          bool larger = tempval > fabs(valx);
           posx += (larger)?1:0;
         }
         if (posx < topk) {
@@ -489,8 +489,8 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
         float valy = ysum[gid];
         uint posy = 0;
         for (uint i = 0; i < osize; i++) {
-          float tempval = ysum[i];
-          bool larger = tempval > valy;
+          float tempval = fabs(ysum[i]);
+          bool larger = tempval > fabs(valy);
           posy += (larger)?1:0;
         }
 
