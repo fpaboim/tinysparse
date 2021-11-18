@@ -43,7 +43,6 @@ def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categoric
       nnzs = model.weight1.count_nnzs()
       t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i" % (np.array(losses)[-16:].mean(), np.array(accuracies)[-16:].mean(), nnzs))
     except Exception as e:
-      print(e)
       t.set_description("loss %.2f accuracy %.2f" % (loss, accuracy))
 
 def evaluate(model, X_test, Y_test, num_classes=None, BS=128, return_predict=False, transform=lambda x: x,

@@ -432,7 +432,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       weight.data.cl, weight.idxs.cl, weight.nnzs.cl, np.uint32(weight.ellw), np.uint32(msize), np.uint32(osize), grad_output.cl, grad_input.data.cl)
 
     genwupdate4 = clbuild(ctx.cl_ctx, "genwupdate4", """
-    // sorts x and y in ascending order and returns sorted indices
+    // gets topk gradients (topk x topk) then selects from matmul result
     __kernel void genwupdate4(__global  float* x,     // INPUT MATRIX DATA
                               __global  float* y,    // INPUT
                               __global  float* xsum,    // INPUT
@@ -443,10 +443,10 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
                               uint topk,
                               __global  uint*  xoutidx,
                               __global  uint*  youtidx,
-                              __global  float* matData,     // INPUT MATRIX DATA
+                              __global  float* matData,     // OUTPUT MATRIX DATA
                               __global  uint*  colIdx,
                               __global  uint*  rowNnz,
-                              __global  float* matDatat,     // INPUT MATRIX DATA
+                              __global  float* matDatat,    // OUTPUT MATRIX DATA
                               __global  uint*  colIdxt,
                               __global  uint*  rowNnzt
                               ) {
