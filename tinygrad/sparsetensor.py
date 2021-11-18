@@ -7,7 +7,7 @@ import numpy as np
 from .tensor import Device, Tensor
 from .densetensor import DenseTensor, GPUBuffer, require_init_gpu, cl_ctx, cl_queue, ane
 
-topk = 2
+topk = 1
 
 require_init_gpu()
 
@@ -66,15 +66,15 @@ class SparseTensor(Tensor):
 
 
     if len(from_datas.keys()) > 0:
-      data = self._move_data(from_datas['data'], device, np.float32)
-      idxs = self._move_data(from_datas['idxs'], device, np.uint32)
-      nnzs = self._move_data(from_datas['nnzs'], device, np.uint32)
-      ellw = from_datas['ellw']
+      self.data = self._move_data(from_datas['data'], device, np.float32)
+      self.idxs = self._move_data(from_datas['idxs'], device, np.uint32)
+      self.nnzs = self._move_data(from_datas['nnzs'], device, np.uint32)
+      self.ellw = from_datas['ellw']
 
-      datat = self._move_data(from_datas['datat'], device, np.float32)
-      idxst = self._move_data(from_datas['idxst'], device, np.uint32)
-      nnzst = self._move_data(from_datas['nnzst'], device, np.uint32)
-      ellwt = from_datas['ellwt']
+      self.datat = self._move_data(from_datas['datat'], device, np.float32)
+      self.idxst = self._move_data(from_datas['idxst'], device, np.uint32)
+      self.nnzst = self._move_data(from_datas['nnzst'], device, np.uint32)
+      self.ellwt = from_datas['ellwt']
     else:
       self.data = self._move_data(data, device, np.float32)
       self.idxs = self._move_data(idxs, device, np.uint32)
@@ -238,12 +238,14 @@ class SparseTensor(Tensor):
       data = np.empty(old.shape, dtype=dtype)
       with ProfileOp("toCPU", [data]):
         cl.enqueue_copy(cl_queue, data, old.cl, is_blocking=True)
+      return data
 
     elif "ANETensor" in str(type(data)):
       if device == Device.ANE: return data
       with ProfileOp("toCPU", [data]):
         data = data.data().astype(dtype)
 
+    # print("DATA", data)
     if not isinstance(data, np.ndarray):
       data = np.array(data, dtype=dtype)
 
@@ -316,11 +318,10 @@ class SparseTensor(Tensor):
     return out
 
   def updategrad(self, grad, lr):
-    # print("UPDATE GRAD", grad.cpu().data, lr)
     # Weight update
+    # print("UPDATE GRAD", grad)
     global cl_ctx, cl_queue
     ctx = cl_ctx
-    bs = grad[1].shape[0]
 
     adddense = cl.Program(ctx,"""
     // Every global_id_0 works on a row
@@ -329,123 +330,81 @@ class SparseTensor(Tensor):
                             __global  uint*  rowNnz,
                             float  lr,
                             uint   ellwidth,
-                            uint   awidth,
-                            __global  float* vector_x    // INPUT
+                            __global  float* matDataAdd,     // INPUT MATRIX DATA
+                            __global  uint*  colIdxAdd,
+                            __global  uint*  rowNnzAdd,
+                            uint ellwidthAdd
                             ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
       uint nrows = get_global_size(0);
 
       uint nnz    = rowNnz[gid];
-      uint baseidxs = gid*ellwidth;
-      uint baseidxd = gid*awidth;
 
-      for (uint i=0; i<awidth; i++) {
-        float addval = vector_x[baseidxd+i] * lr;
-        //if (gid==1)
-        //  printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[baseidxs+i]);
-        if (addval == 0) {
+      uint baseidxs = gid*ellwidth;
+      uint baseidxd = gid*ellwidthAdd;
+
+      uint nnzadd = rowNnzAdd[gid];
+      //printf("\\nNNZs: %i   GID:%i", nnzadd, gid);
+
+      for (uint i=0; i<nnzadd; i++) {
+        float addval = matDataAdd[baseidxd+i];
+        uint addcol = colIdxAdd[baseidxd+i];
+
+        uint refcol = colIdx[baseidxs+i];
+        uint m = 0;
+        while (addcol > refcol) {
+          m += 1;
+          refcol = colIdx[baseidxs+i+m];
+        }
+
+        //printf("\\nADD VAL:%.2f  ADDCOL:%i  idxs/d:(%i/%i)  gid/i:(%i/%i)", addval, addcol, baseidxs, baseidxd, gid,i);
+        if (addval == 0.0) {
+          //printf("\\nZERO VAL, CONT: %.2f - %i", addval, gid);
           continue;
         }
-        if (i == colIdx[baseidxs+i]) {
-          matData[baseidxs+i] += addval;
+        if (addcol == refcol) {
+          matData[baseidxs+i+m] += addval;
+          //printf("\\nINCREMENT: %.2f",addval);
         } else {
-          if (rowNnz[gid] >= ellwidth) {
-            break;
-          }
-          if (i > colIdx[baseidxs+i]) {
+          //if (rowNnz[gid] >= ellwidth) {
+          //  break;
+          //}
+          if (addcol > refcol) {
             rowNnz[gid] += 1;
-            //if (gid==1)
-            //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-            matData[baseidxs+i] = addval;
-            colIdx[baseidxs+i] = i;
+            //printf("\\nSET VAL0:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
+            matData[baseidxs+i+m] = addval;
+            colIdx[baseidxs+i+m] = addcol;
             continue;
           }
-          for (uint j=nnz; j>i; j--) {
+          for (uint j=nnz; j>i+m; j--) {
             //printf("\\nMOVE:%.2f", matData[baseidx+j-1]);
             colIdx[baseidxs+j] = colIdx[baseidxs+j-1];
             matData[baseidxs+j] = matData[baseidxs+j-1];
           }
           rowNnz[gid] += 1;
           nnz = rowNnz[gid];
-          //if (gid==1)
-          //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-          matData[baseidxs+i] = addval;
-          colIdx[baseidxs+i] = i;
-          if (nnz >= ellwidth)
-            break;
+
+          //printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
+          matData[baseidxs+i+m] = addval;
+          colIdx[baseidxs+i+m] = addcol;
+          //if (nnz >= ellwidth)
+          //  break;
         }
       }
     }""").build().__getattr__('adddense')
 
-    # resa = np.ones(self.shape[0]).astype(np.float32)
-    # cl.enqueue_copy(ctx.cl_queue, resa, grad.cl)
-    # print('RESA2:', resa)
-
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
     adddense(cl_queue, [grad.shape[0]], None,
-      self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw), np.uint32(grad.shape[1]), grad.data.cl)
+      self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw),
+      grad.data.cl, grad.idxs.cl, grad.nnzs.cl, np.uint32(topk))
 
-    adddenset = cl.Program(ctx,"""
-    // Every global_id_0 works on a row
-    __kernel void adddenset(__global  float* matData,     // INPUT MATRIX DATA
-                            __global  uint*  colIdx,
-                            __global  uint*  rowNnz,
-                            float  lr,
-                            uint   ellwidth,
-                            uint   aheight,
-                            __global  float* vector_x    // INPUT
-                            ) { // LOCAL SHARED BUFFER
-      uint gid = get_global_id(0);
-      uint ncols = get_global_size(0);
-
-      uint nnz    = rowNnz[gid];
-      uint baseidxs = gid*ellwidth;
-
-      for (uint i=0; i<aheight; i++) {
-        if (nnz > ellwidth)
-            break;
-        uint baseidxd = i*ncols+gid;
-        float addval = vector_x[baseidxd]*lr;
-        //if (gid==1)
-        //  printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[baseidxs+i]);
-        if (addval == 0) {
-          continue;
-        }
-        if (i == colIdx[baseidxs+i]) {
-          //printf("\\nADD VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-          matData[baseidxs+i] += addval;
-        } else {
-          if (rowNnz[gid] >= ellwidth) {
-            break;
-          }
-          if (i > colIdx[baseidxs+i]) {
-            rowNnz[gid] += 1;
-            //if (gid==1)
-            //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-            matData[baseidxs+i] = addval;
-            colIdx[baseidxs+i] = i;
-            continue;
-          }
-          for (uint j=nnz; j>i; j--) {
-            //printf("\\nMOVE:%.2f", matData[baseidx+j-1]);
-            colIdx[baseidxs+j] = colIdx[baseidxs+j-1];
-            matData[baseidxs+j] = matData[baseidxs+j-1];
-          }
-          rowNnz[gid] += 1;
-          nnz = rowNnz[gid];
-          //if (gid==1)
-          //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-          matData[baseidxs+i] = addval;
-          colIdx[baseidxs+i] = i;
-        }
-      }
-    }""").build().__getattr__('adddenset')
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
-    adddenset(cl_queue, [grad.shape[1]], None,
-      self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(lr), np.uint32(self.ellwt), np.uint32(grad.shape[0]), grad.data.cl)
+    adddense(cl_queue, [grad.shape[1]], None,
+      self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(lr), np.uint32(self.ellwt),
+      grad.datat.cl, grad.idxst.cl, grad.nnzst.cl, np.uint32(topk))
     # self._ctx = None
 
   def to_(self, device):

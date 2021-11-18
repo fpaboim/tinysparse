@@ -445,7 +445,10 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
                               __global  uint*  youtidx,
                               __global  float* matData,     // INPUT MATRIX DATA
                               __global  uint*  colIdx,
-                              __global  uint*  rowNnz
+                              __global  uint*  rowNnz,
+                              __global  float* matDatat,     // INPUT MATRIX DATA
+                              __global  uint*  colIdxt,
+                              __global  uint*  rowNnzt
                               ) {
       uint gid = get_global_id(0);
 
@@ -518,27 +521,57 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
 
       // only calc matrix multiplications for used grads
       ///////////////////////////////////////////////////
-      for (uint i=0; i<topk; i++) {
-        matData[gid*topk+i] = 0;
-        colIdx[gid*topk+i] = 0;
+      if (gid < isize) {
+        for (uint i=0; i<topk; i++) {
+          matData[gid*topk+i] = 0;
+          colIdx[gid*topk+i] = 0;
+        }
+        rowNnz[gid] = 0;
       }
-      rowNnz[gid] = 0;
+      if (gid < osize) {
+        for (uint i=0; i<topk; i++) {
+          matDatat[gid*topk+i] = 0;
+          colIdxt[gid*topk+i] = 0;
+        }
+        rowNnzt[gid] = 0;
+      }
+
 
       if (gid < topk) {
         uint idxx = xoutidx[gid];
         for (uint j=0; j<topk; j++) {
           uint idxy = youtidx[j];
-          printf("IDXX:%i  IDXY:%i", idxx, idxy);
+          //printf("\\nIDXX:%i  IDXY:%i", idxx, idxy);
           for (uint k=0; k<msize; k++) {
             uint xidx2 = isize*k+idxx;
             uint yidx2 = osize*k+idxy;
             uint colidx = idxy;
             matData[idxx*topk+j] += x[xidx2] * y[yidx2];
             colIdx[idxx*topk+j] = idxy;
-            if (gid == 0)
-              printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
+            //if (gid == 0)
+            //  printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
           }
           rowNnz[idxx] += 1;
+        }
+      }
+
+      if (gid < topk) {
+        uint idxy = youtidx[gid];
+        for (uint j=0; j<topk; j++) {
+          uint idxx = xoutidx[j];
+          //printf("\\nB-IDXX:%i  IDXY:%i", idxx, idxy);
+          for (uint k=0; k<msize; k++) {
+            uint xidx2 = isize*k+idxx;
+            uint yidx2 = osize*k+idxy;
+            uint colidx = idxy;
+            float addval = x[xidx2] * y[yidx2];
+            matDatat[idxy*topk+j] += addval;
+            colIdxt[idxy*topk+j] = idxx;
+            //if (gid == 0)
+            //  printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
+          }
+          rowNnzt[idxy] += 1;
+          //printf("\\nAdd NNz:%i - %i", idxy, rowNnzt[idxy]);
         }
       }
     }""")
@@ -564,9 +597,32 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     # print('GIB', grad_input.cpu().data)
 
     genwupdate4(ctx.cl_queue, [max(weight.shape[0],weight.shape[1])], None,
-      input.cl, grad_output.cl, x_sum_buf.data.cl, y_sum_buf.data.cl, np.uint32(isize), np.uint32(msize),np.uint32(osize), np.uint32(topk), x_idx_buf, y_idx_buf, sdata_buf, sidxs_buf, snnzs_buf)
+      input.cl, grad_output.cl, x_sum_buf.data.cl, y_sum_buf.data.cl, np.uint32(isize), np.uint32(msize),np.uint32(osize), np.uint32(topk), x_idx_buf.data.cl, y_idx_buf.data.cl,
+      sdata_buf.data.cl, sidxs_buf.data.cl, snnzs_buf.data.cl, sdatat_buf.data.cl, sidxst_buf.data.cl, snnzst_buf.data.cl)
 
-    w_grad = GradData(x_cp_buf, x_idx_buf, y_idx_buf, weight.shape)
+    x_sum_buf.data.cl.release()
+    y_sum_buf.data.cl.release()
+    # sdata_buf.data.cl.release()
+    # sidxs_buf.data.cl.release()
+    # snnzs_buf.data.cl.release()
+    # sdatat_buf.data.cl.release()
+    # sidxst_buf.data.cl.release()
+    # snnzst_buf.data.cl.release()
+    x_idx_buf.data.cl.release()
+    y_idx_buf.data.cl.release()
+
+    newdata = {
+     'data': sdatat_buf.data,
+     'idxs': sidxst_buf.data,
+     'nnzs': snnzst_buf.data,
+     'ellw': topk,
+     'datat': sdata_buf.data,
+     'idxst': sidxs_buf.data,
+     'nnzst': snnzs_buf.data,
+     'ellwt': topk,
+    }
+    w_grad = SparseTensor(from_datas=newdata, shape=weight.shape)
+
     return w_grad, grad_input
 
 

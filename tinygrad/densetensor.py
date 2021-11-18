@@ -167,12 +167,11 @@ class DenseTensor(Tensor):
           # if not (not isinstance(t, DenseTensor)) and (not isinstance(t,GPUBuffer)):
           assert g.shape == t.shape, \
             f"grad shape must match tensor shape in {self._ctx!r}, {g.shape!r} != {t.shape!r}"
-          gt = g
-          # if isinstance(g, DenseTensor):
-          #   # print("DENSETENSOR")
-          #   gt = g
-          # else:
-          #   gt = DenseTensor(g, device=self.device, requires_grad=False)
+          # gt = g
+          if isinstance(g, GPUBuffer):
+            gt = DenseTensor(g, device=self.device, requires_grad=False)
+          else:
+            gt = g
           t.grad = gt if t.grad is None else (t.grad + gt)
           # try:
           #   if t.is_sparse():

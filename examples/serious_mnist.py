@@ -22,7 +22,7 @@ class MLP:
     # w_init2 = np.random.randn(BS,10).astype(np.float32) / 1000
     # self.weight1 = DenseTensor.uniform(784,10)
     # self.weight2 = SparseTensor.uniform(10,10)
-    self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.8)
+    self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.99)
     # self.weight2 = SparseTensor.uniform(128,16)
     # self.weight2 = SparseTensor(w_init2)
 
@@ -38,7 +38,7 @@ class MLP:
 if __name__ == "__main__":
   lrs = [1e-4] #if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
   epochss = [2, 1] if QUICK else [13, 3, 3, 1]
-  BS = 64
+  BS = 32
 
   lmbd = 0.00025
   lossfn = lambda out,y: sparse_categorical_crossentropy(out, y)
