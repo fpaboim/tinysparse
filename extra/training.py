@@ -16,7 +16,7 @@ def sparse_categorical_crossentropy(out, Y):
 
 def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
         transform=lambda x: x, target_transform=lambda x: x):
-  DenseTensor.training = True
+  DenseTensor.training = False
   losses, accuracies = [], []
   for i in (t := trange(steps, disable=os.getenv('CI') is not None)):
     samp = np.random.randint(0, X_train.shape[0], size=(BS))
@@ -41,7 +41,7 @@ def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categoric
     accuracies.append(accuracy)
     try:
       nnzs = model.weight1.count_nnzs()
-      t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i" % (np.array(losses)[-16:].mean(), np.array(accuracies)[-16:].mean(), nnzs))
+      t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i" % (np.array(losses)[-32:].mean(), np.array(accuracies)[-32:].mean(), nnzs))
     except Exception as e:
       t.set_description("loss %.2f accuracy %.2f" % (loss, accuracy))
 

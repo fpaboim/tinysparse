@@ -21,9 +21,9 @@ class MLP:
     # w_init = np.random.randn(784,10).astype(np.float32) / 1000
     # w_init2 = np.random.randn(BS,10).astype(np.float32) / 1000
     # self.weight1 = DenseTensor.uniform(784,10)
-    # self.weight2 = SparseTensor.uniform(10,10)
-    self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.4)
-    # self.weight2 = SparseTensor.uniform(256,10,randsparsity=0.1)
+    self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.01)
+    # self.weight1 = SparseTensor.uniform(784,128,randsparsity=0.5)
+    # self.weight2 = DenseTensor.uniform(784,10)
     # self.weight2 = SparseTensor.uniform(128,16)
     # self.weight2 = SparseTensor(w_init2)
 
@@ -38,7 +38,7 @@ class MLP:
 
 if __name__ == "__main__":
   lrs = [1e-4] #if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
-  epochss = [2, 1] if QUICK else [13, 3, 3, 1]
+  epochs = 100
   BS = 32
 
   lmbd = 0.00025
@@ -64,11 +64,10 @@ if __name__ == "__main__":
     params = get_parameters(model)
     [x.gpu_() for x in params]
 
-  for lr, epochs in zip(lrs, epochss):
-    optimizer = optim.SGD(model.parameters(), lr=.000001)
-    for epoch in range(1,epochs+1):
-      #first epoch without augmentation
-      X_aug = X_train #if epoch == 1 else augment_img(X_train)
-      train(model, X_aug, Y_train, optimizer, steps=steps,  BS=BS)
-      accuracy = evaluate(model, X_test, Y_test, BS=BS)
-      # model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')
+  optimizer = optim.SGD(model.parameters(), lr=.0001)
+  for epoch in range(1,epochs+1):
+    #first epoch without augmentation
+    X_aug = X_train #if epoch == 1 else augment_img(X_train)
+    train(model, X_aug, Y_train, optimizer, steps=steps,  BS=BS)
+    accuracy = evaluate(model, X_test, Y_test, BS=BS)
+    # model.save(f'examples/checkpoint{accuracy * 1e6:.0f}')
