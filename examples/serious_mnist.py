@@ -20,12 +20,12 @@ class MLP:
   def __init__(self):
     # w_init = np.random.randn(784,10).astype(np.float32) / 1000
     # w_init2 = np.random.randn(BS,10).astype(np.float32) / 1000
-    # self.weight1 = DenseTensor.uniform(784,32)
-    self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.1)
+    # self.weight1 = DenseTensor.uniform(784,128)
+    self.weight1 = SparseTensor.uniform(784,256,randsparsity=0.7)
     # self.weight1 = DenseTensor.uniform(784,10)
-    # self.weight1 = SparseTensor.uniform(784,128,randsparsity=0.5)
-    # self.weight2 = DenseTensor.uniform(32,10)
-    # self.weight2 = SparseTensor.uniform(128,16)
+    # self.weight2 = SparseTensor.uniform(128,10,randsparsity=0.1)
+    self.weight2 = DenseTensor.uniform(256,10)
+    # self.weight2 = SparseTensor.uniform(64,10,randsparsity=0.1)
     # self.weight2 = SparseTensor(w_init2)
 
   def parameters(self):
@@ -33,7 +33,7 @@ class MLP:
 
   def forward(self, x):
     x = x.dot(self.weight1)
-    # x = x.dot(self.weight2)
+    x = x.dot(self.weight2)
     x = x.logsoftmax()
     return x
 

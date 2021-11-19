@@ -7,7 +7,7 @@ import numpy as np
 from .tensor import Device, Tensor
 from .densetensor import DenseTensor, GPUBuffer, require_init_gpu, cl_ctx, cl_queue, ane
 
-topk = 128
+topk = 16
 
 require_init_gpu()
 
