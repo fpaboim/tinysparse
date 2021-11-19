@@ -7,7 +7,7 @@ import numpy as np
 from .tensor import Device, Tensor
 from .densetensor import DenseTensor, GPUBuffer, require_init_gpu, cl_ctx, cl_queue, ane
 
-topk = 784
+topk = 128
 
 require_init_gpu()
 
@@ -330,7 +330,7 @@ class SparseTensor(Tensor):
           out[row,newcols[row*ellw+icol]] = newdata[row*ellw+icol]
     return out
 
-  def prune(self):
+  def prune(self, pruneval):
     global cl_ctx, cl_queue
     ctx = cl_ctx
 
@@ -348,7 +348,7 @@ class SparseTensor(Tensor):
         uint idx = ellw * gid + i;
         float val = matData[idx];
         //printf("\\nDATA:%.2f - %.2f", matData[idx], pruneval);
-        if(val<pruneval) {
+        if(fabs(val)<pruneval) {
           //printf("\\nPRUNE(%i): %.2f", gid, matData[idx]);
           for (uint j=i; j<=nnzs-1; j++) {
             uint idx2 = ellw * gid + j;
@@ -365,7 +365,6 @@ class SparseTensor(Tensor):
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
-    pruneval = 0.00000001
     prune(cl_queue, [self.shape[0],], None, self.data.cl, self.idxs.cl, self.nnzs.cl, np.uint32(self.ellw), np.float32(pruneval))
     prune(cl_queue, [self.shape[1],], None, self.datat.cl, self.idxst.cl, self.nnzst.cl, np.uint32(self.ellwt), np.float32(pruneval))
 

@@ -395,44 +395,42 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     # print('IN', DenseTensor(input).cpu().data, grad_output)
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
 
-    grad_input = DenseTensor(np.zeros(input.shape))
-
-
+    grad_input = DenseTensor(np.zeros(input.shape), dtype=np.float32)
+    # print('GO:', grad_output.shape, weight.shape, grad_input.shape)
     # print("OUTSHAPE:", weight.shape, input.shape[0], isize, msize, weight.ellwt)
 
-    matmul2 = clbuild(ctx.cl_ctx, "matmul2", """
+    matmul = clbuild(ctx.cl_ctx, "matmul", """
     // DENSE x SPARSE
-    __kernel void matmul2(__global  float* matData,     // INPUT MATRIX DATA
+    __kernel void matmul(__global  float* matData,     // INPUT MATRIX DATA
                             __global  uint*  colIdx,
                             __global  uint*  rowNnz,
                             uint   ellwidth,
                             uint   mwidth,
+                            uint   ncols,
                             __global  float* vector_x,    // INPUT
                             __global  float* vector_y    // OUTPUT
                             ) { // LOCAL SHARED BUFFER
       uint gid = get_global_id(0);
       uint nrows = get_global_size(0);
-      uint gid2 = get_global_id(1);
-      uint ncols = get_global_size(1);
-      uint nnz = rowNnz[gid2];
-      float sum = 0;
-      for (uint i = 0; i < nnz; i++) {
-        uint index   = (gid2 * ellwidth) + i;
-        uint col     = colIdx[index];
-        float aval  = matData[index];
-        float xval  = vector_x[gid*mwidth+col];
-        sum  += aval * xval;
-        //if (gid==0 && gid2==0)
-        //  printf("aval, xval: %.2f,%.2f - %.2f: (%i,%i) \\n", aval, xval, sum, col, index);
+
+      for (uint gid2 = 0; gid2 < ncols; gid2++) {
+        uint nnz = rowNnz[gid2];
+        float sum = 0;
+        for (uint i = 0; i < nnz; i++) {
+          uint index   = (gid2 * ellwidth) + i;
+          uint col     = colIdx[index];
+          float aval  = matData[index];
+          float xval  = vector_x[gid*mwidth+col];
+          sum  += aval * xval;
+        }
         //printf("SUM/NNZ: %.2f %i \\n", sum, nnz);
-
+        //vector_y[gid*ncols+gid2] = sum;
       }
-      //vector_y[gid2*nrows+gid] = sum;
     }""")
-
     # (isize,osize) x (msize,osize) = (isize,msize)
-    matmul2(ctx.cl_queue, [isize, osize], None,
-      weight.data.cl, weight.idxs.cl, weight.nnzs.cl, np.uint32(weight.ellw), np.uint32(msize), grad_output.cl, grad_input.data.cl)
+    # print('msize:', grad_output.shape, input.shape)
+    matmul(ctx.cl_queue, [input.shape[1],], None,
+      weight.datat.cl, weight.idxst.cl, weight.nnzst.cl, np.uint32(weight.ellwt), np.uint32(grad_output.shape[1]), np.uint32(input.shape[0]), grad_output.cl, grad_input.data.cl)
 
     genwupdate4 = clbuild(ctx.cl_ctx, "genwupdate4", """
     // sorts x and y in ascending order and returns sorted indices

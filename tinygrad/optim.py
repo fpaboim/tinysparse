@@ -15,8 +15,10 @@ class SGD(Optimizer):
     self.lr = lr
     self.factor = 0.999
     self.decay = 1*self.factor
+    self.iter = 0
 
   def step(self):
+    self.iter += 1
     for t in self.params:
       # print('GRADt:', (t.grad.cpu().data*10).sum())
       if t.is_sparse():
@@ -24,7 +26,8 @@ class SGD(Optimizer):
 
         # self.lr = self.lr * self.factor
         t.updategrad(t.grad, -self.lr)
-        # t.prune()
+        if self.iter % 8 == 0:
+          t.prune(0.001)
         #t te_ctx = None
       else:
         # print("UPDATE GRAD", t.grad.cpu().data, self.lr)

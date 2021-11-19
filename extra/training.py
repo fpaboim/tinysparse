@@ -3,6 +3,7 @@ import numpy as np
 from tqdm import trange
 from extra.utils import get_parameters
 from tinygrad.densetensor import DenseTensor, GPU, Device
+from tinygrad.sparsetensor import SparseTensor
 
 def sparse_categorical_crossentropy(out, Y):
   num_classes = out.shape[-1]
@@ -16,7 +17,8 @@ def sparse_categorical_crossentropy(out, Y):
 
 def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
         transform=lambda x: x, target_transform=lambda x: x):
-  DenseTensor.training = False
+  DenseTensor.training = True
+  SparseTensor.training = True
   losses, accuracies = [], []
   for i in (t := trange(steps, disable=os.getenv('CI') is not None)):
     samp = np.random.randint(0, X_train.shape[0], size=(BS))
@@ -48,6 +50,7 @@ def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categoric
 def evaluate(model, X_test, Y_test, num_classes=None, BS=128, return_predict=False, transform=lambda x: x,
              target_transform=lambda y: y):
   DenseTensor.training = False
+  SparseTensor.training = False
   def numpy_eval(Y_test, num_classes):
     Y_test_preds_out = np.zeros(list(Y_test.shape)+[num_classes])
     for i in trange((len(Y_test)-1)//BS+1, disable=os.getenv('CI') is not None):
