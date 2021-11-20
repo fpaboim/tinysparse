@@ -419,14 +419,9 @@ class Matmul(Function):
     # resa = np.zeros((input.shape[1], input.shape[0])).astype(np.float32)
     # cl.enqueue_copy(ctx.cl_queue, resa, grad_input.cl)
 
-    # print('SHAPES:', input.shape, weight.shape)
-    # print('INPUT', DenseTensor(input).cpu().data)
+    # print('INPUT', DenseTensor(grad_output).cpu().data)
     # print('OUT:', DenseTensor(grad_input).cpu().data)
-    # asdf
 
-    # print('IN', DenseTensor(input).cpu().data)
-    # print('GO', DenseTensor(grad_output).cpu().data)
-    # print('GIB', DenseTensor(grad_input).cpu().data)
     return grad_input, grad_weight
 
 class Conv2D(Function):

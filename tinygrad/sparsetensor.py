@@ -7,7 +7,7 @@ import numpy as np
 from .tensor import Device, Tensor
 from .densetensor import DenseTensor, GPUBuffer, require_init_gpu, cl_ctx, cl_queue, ane
 
-topk = 16
+topk = 64
 
 require_init_gpu()
 
@@ -444,18 +444,22 @@ class SparseTensor(Tensor):
       }
     }""").build().__getattr__('adddense')
 
+    dim2 = min(self.shape[1], topk)
+    dim1 = min(self.shape[0], topk)
+    dim2 = min(dim1,dim2)
+
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
     adddense(cl_queue, [grad.shape[1]], None,
       self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(lr), np.uint32(self.ellwt),
-      grad.data.cl, grad.idxs.cl, grad.nnzs.cl, np.uint32(topk))
+      grad.datat.cl, grad.idxst.cl, grad.nnzst.cl, np.uint32(dim2))
 
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
     adddense(cl_queue, [grad.shape[0]], None,
       self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw),
-      grad.datat.cl, grad.idxst.cl, grad.nnzst.cl, np.uint32(topk))
+      grad.data.cl, grad.idxs.cl, grad.nnzs.cl, np.uint32(dim2))
     # self._ctx = None
 
   def to_(self, device):

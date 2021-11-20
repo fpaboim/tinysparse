@@ -399,7 +399,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     # print('GO:', grad_output.shape, weight.shape, grad_input.shape, input.shape)
     # print("OUTSHAPE:", weight.shape, input.shape[0], isize, msize, weight.ellwt)
 
-    grad_output += weight.m
+    grad_output = grad_output + weight.m
 
     matmul2 = clbuild(ctx.cl_ctx, "matmul2", """
     // DENSE x SPARSE-T
@@ -594,23 +594,27 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     msize = grad_output.shape[0]
     osize = weight.shape[1]
 
+    dim2 = min(weight.shape[1], topk)
+    dim1 = min(weight.shape[0], topk)
+    dim2 = min(dim1,dim2)
+
     x_sum_buf   = DenseTensor(np.zeros(weight.shape[0]))
     y_sum_buf   = DenseTensor(np.zeros(weight.shape[1]))
-    sdata_buf   = DenseTensor(np.zeros(weight.shape[0]*topk))
-    sidxs_buf   = DenseTensor(np.zeros(weight.shape[0]*topk), dtype=np.uint32)
-    snnzs_buf   = DenseTensor(np.zeros(weight.shape[0]*topk), dtype=np.uint32)
-    sdatat_buf  = DenseTensor(np.zeros(weight.shape[0]*topk))
-    sidxst_buf  = DenseTensor(np.zeros(weight.shape[0]*topk), dtype=np.uint32)
-    snnzst_buf  = DenseTensor(np.zeros(weight.shape[0]*topk), dtype=np.uint32)
-    x_idx_buf   = DenseTensor(np.zeros(topk), dtype=np.uint32)
-    y_idx_buf   = DenseTensor(np.zeros(topk), dtype=np.uint32)
+    sdata_buf   = DenseTensor(np.zeros(weight.shape[0]*dim2))
+    sidxs_buf   = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
+    snnzs_buf   = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
+    sdatat_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2))
+    sidxst_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
+    snnzst_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
+    x_idx_buf   = DenseTensor(np.zeros(dim2), dtype=np.uint32)
+    y_idx_buf   = DenseTensor(np.zeros(dim2), dtype=np.uint32)
 
     # print('IN', DenseTensor(input).cpu().data, weight.shape, input.shape[0])
-    # print('GO', DenseTensor(grad_output).cpu().data)
-    # print('GIB', grad_input.cpu().data)
+    # print('INPUT', grad_output.cpu().data)
+    # print('OUT', grad_input.cpu().data)
 
     genwupdate4(ctx.cl_queue, [max(weight.shape[0],weight.shape[1])], None,
-      input.cl, grad_output.data.cl, x_sum_buf.data.cl, y_sum_buf.data.cl, np.uint32(isize), np.uint32(msize),np.uint32(osize), np.uint32(topk), x_idx_buf.data.cl, y_idx_buf.data.cl,
+      input.cl, grad_output.data.cl, x_sum_buf.data.cl, y_sum_buf.data.cl, np.uint32(isize), np.uint32(msize),np.uint32(osize), np.uint32(dim2), x_idx_buf.data.cl, y_idx_buf.data.cl,
       sdata_buf.data.cl, sidxs_buf.data.cl, snnzs_buf.data.cl, sdatat_buf.data.cl, sidxst_buf.data.cl, snnzst_buf.data.cl)
 
     x_sum_buf.data.cl.release()
@@ -625,14 +629,14 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     # y_idx_buf.data.cl.release()
 
     newdata = {
-     'data': sdatat_buf.data,
-     'idxs': sidxst_buf.data,
-     'nnzs': snnzst_buf.data,
-     'ellw': topk,
-     'datat': sdata_buf.data,
-     'idxst': sidxs_buf.data,
-     'nnzst': snnzs_buf.data,
-     'ellwt': topk,
+     'data': sdata_buf.data,
+     'idxs': sidxs_buf.data,
+     'nnzs': snnzs_buf.data,
+     'ellw': dim2,
+     'datat': sdatat_buf.data,
+     'idxst': sidxst_buf.data,
+     'nnzst': snnzst_buf.data,
+     'ellwt': dim2,
     }
     w_grad = SparseTensor(from_datas=newdata, shape=weight.shape)
 
@@ -659,14 +663,14 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       for (uint i=0; i<nnz; i++) {
         uint col = colIdx[gid*topk+i];
         float val = matData[gid*topk+i];
-        m[osize*gid+col] -= - val*scale;
+        m[osize*gid+col] -= val*scale;
       }
     }""")
 
     scale = 0.2
 
     # updatem(ctx.cl_queue, [grad_output.shape[0],], None,
-    #   weight.m.data.cl, grad_output.data.cl, np.uint32(grad_input.shape[-1]), np.uint32(grad_output.shape[1]), np.uint32(topk), np.float32(scale), x_idx_buf.data.cl, y_idx_buf.data.cl,
+    #   weight.m.data.cl, grad_output.data.cl, np.uint32(grad_input.shape[-1]), np.uint32(grad_output.shape[1]), np.uint32(dim2), np.float32(scale), x_idx_buf.data.cl, y_idx_buf.data.cl,
     #   sdata_buf.data.cl, sidxs_buf.data.cl, snnzs_buf.data.cl)
 
     return w_grad, grad_input
