@@ -7,7 +7,8 @@ import numpy as np
 from .tensor import Device, Tensor
 from .densetensor import DenseTensor, GPUBuffer, require_init_gpu, cl_ctx, cl_queue, ane
 
-topk = 64
+topkx = 10
+topky = 784
 
 require_init_gpu()
 
@@ -162,7 +163,7 @@ class SparseTensor(Tensor):
     # print('ellw:', ellwidth, shape)
     cols = {}
     for row in range(shape[0]):
-      rowdata = np.random.rand(nnzs) / 100
+      rowdata = np.random.rand(nnzs) / 1000
       rowidx = sorted(np.random.permutation(shape[1])[:nnzs])
 
       i = 0
@@ -308,7 +309,7 @@ class SparseTensor(Tensor):
     ctx = cl_ctx
 
     if dual:
-      data, cols, nnzs, ellw, shape = self.datat, self.idxst, self.nnzst, self.ellwt, np.array(self.shape).T
+      data, cols, nnzs, ellw, shape = self.datat, self.idxst, self.nnzst, self.ellwt, (self.shape[1], self.shape[0])
     else:
       data, cols, nnzs, ellw, shape = self.data, self.idxs, self.nnzs, self.ellw, self.shape
 
@@ -444,9 +445,8 @@ class SparseTensor(Tensor):
       }
     }""").build().__getattr__('adddense')
 
-    dim2 = min(self.shape[1], topk)
-    dim1 = min(self.shape[0], topk)
-    dim2 = min(dim1,dim2)
+    dim1 = min(self.shape[1], topkx)
+    dim2 = min(self.shape[0], topky)
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
@@ -459,7 +459,7 @@ class SparseTensor(Tensor):
     # print('grad:', grad)
     adddense(cl_queue, [grad.shape[0]], None,
       self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw),
-      grad.data.cl, grad.idxs.cl, grad.nnzs.cl, np.uint32(dim2))
+      grad.data.cl, grad.idxs.cl, grad.nnzs.cl, np.uint32(dim1))
     # self._ctx = None
 
   def to_(self, device):

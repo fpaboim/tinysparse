@@ -16,10 +16,10 @@ GPU = True
 QUICK = False
 DEBUG = False
 
-import networkx as nx
-G = nx.generators.random_graphs.fast_gnp_random_graph(784, .8, seed=3)
-m = nx.to_numpy_matrix(G)[:,:10] / 100
-print(m.shape)
+# import networkx as nx
+# G = nx.generators.random_graphs.fast_gnp_random_graph(784, .8, seed=3)
+# m = nx.to_numpy_matrix(G)[:,:10] / 100
+# print(m.shape)
 dummy = DenseTensor.uniform(784,10).cpu().data
 
 class MLP:
@@ -27,9 +27,10 @@ class MLP:
     # w_init  = np.random.randn(784,10).astype(np.float32) / 1000
     # w_init2 = np.random.randn(BS,10).astype(np.float32) / 1000
 
-    # self.weight1   = SparseTensor(dummy)
+    self.weight1   = SparseTensor(dummy)
+    # self.weight1 = DenseTensor(dummy)
     # self.weight1 = DenseTensor.uniform(784,10)
-    self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.01)
+    # self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.001)
     # self.weight2 = SparseTensor.uniform(128,10,randsparsity=0.1)
     # self.weight2 = DenseTensor.uniform(128,10)
     # self.weight2 = SparseTensor.uniform(64,10,randsparsity=0.1)
@@ -72,7 +73,7 @@ if __name__ == "__main__":
     params = get_parameters(model)
     [x.gpu_() for x in params]
 
-  optimizer = optim.SGD(model.parameters(), lr=.0001)
+  optimizer = optim.SGD(model.parameters(), lr=.00001)
   for epoch in range(1,epochs+1):
     #first epoch without augmentation
     X_aug = X_train #if epoch == 1 else augment_img(X_train)

@@ -1,7 +1,7 @@
 import functools
 import pyopencl as cl
 import numpy as np
-from .sparsetensor import SparseFunction, topk, SparseTensor
+from .sparsetensor import SparseFunction, topkx, topky, SparseTensor
 from .densetensor import GPUBuffer, DenseTensor
 
 class GradData:
@@ -453,7 +453,8 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
                               uint isize,
                               uint msize,
                               uint osize,
-                              uint topk,
+                              uint topkx,
+                              uint topky,
                               __global  uint*  xoutidx,
                               __global  uint*  youtidx,
                               __global  float* matData,     // OUTPUT MATRIX DATA
@@ -484,8 +485,8 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
           bool larger = tempval > fabs(valx);
           posx += (larger)?1:0;
         }
-        if (posx < topk) {
-          xoutidx[posx] = gid;
+        if (posx < topky) {
+          youtidx[posx] = gid;
         }
       }
 
@@ -507,24 +508,26 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
           posy += (larger)?1:0;
         }
 
-        if (posy < topk) {
-          youtidx[posy] = gid;
+        if (posy < topkx) {
+          xoutidx[posy] = gid;
         }
       }
 
-      if (gid < topk) {
+      if (gid < topkx) {
         float valx = xoutidx[gid];
         uint posx = 0;
-        for (uint i = 0; i < topk; i++) {
+        for (uint i = 0; i < topkx; i++) {
           float tempval = xoutidx[i];
           bool larger = tempval < valx;
           posx += (larger)?1:0;
         }
         xoutidx[posx] = valx;
+      }
 
+      if (gid < topky) {
         float valy = youtidx[gid];
         uint posy = 0;
-        for (uint i = 0; i < topk; i++) {
+        for (uint i = 0; i < topky; i++) {
           float tempval = youtidx[i];
           bool larger = tempval < valy;
           posy += (larger)?1:0;
@@ -535,56 +538,53 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       // only calc matrix multiplications for used grads
       ///////////////////////////////////////////////////
       if (gid < isize) {
-        for (uint i=0; i<topk; i++) {
-          matData[gid*topk+i] = 0;
-          colIdx[gid*topk+i] = 0;
+        for (uint i=0; i<topkx; i++) {
+          matData[gid*topkx+i] = 0;
+          colIdx[gid*topkx+i] = 0;
         }
         rowNnz[gid] = 0;
       }
       if (gid < osize) {
-        for (uint i=0; i<topk; i++) {
-          matDatat[gid*topk+i] = 0;
-          colIdxt[gid*topk+i] = 0;
+        for (uint i=0; i<topky; i++) {
+          matDatat[gid*topky+i] = 0;
+          colIdxt[gid*topky+i] = 0;
         }
         rowNnzt[gid] = 0;
       }
 
 
-      if (gid < topk) {
+      if (gid < topkx) {
         uint idxx = xoutidx[gid];
-        for (uint j=0; j<topk; j++) {
+        for (uint j=0; j<topky; j++) {
           uint idxy = youtidx[j];
+          //printf("\\n[%i] IDXX:%i  IDXY:%i", j, idxx, idxy);
+          for (uint k=0; k<msize; k++) {
+            uint xidx2 = isize*k+idxy;
+            uint yidx2 = osize*k+idxx;
+            uint colidx = idxy;
+            matDatat[idxx*topky+j] += x[xidx2] * y[yidx2];
+            colIdxt[idxx*topky+j] = idxy;
+            //if (gid == 0)
+            //  printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
+          }
+          rowNnzt[idxx] += 1;
+        }
+      }
+      if (gid < topky) {
+        uint idxx = youtidx[gid];
+        for (uint j=0; j<topkx; j++) {
+          uint idxy = xoutidx[j];
           //printf("\\nIDXX:%i  IDXY:%i", idxx, idxy);
           for (uint k=0; k<msize; k++) {
             uint xidx2 = isize*k+idxx;
             uint yidx2 = osize*k+idxy;
             uint colidx = idxy;
-            matData[idxx*topk+j] += x[xidx2] * y[yidx2];
-            colIdx[idxx*topk+j] = idxy;
+            matData[idxx*topkx+j] += x[xidx2] * y[yidx2];
+            colIdx[idxx*topkx+j] = idxy;
             //if (gid == 0)
             //  printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
           }
           rowNnz[idxx] += 1;
-        }
-      }
-
-      if (gid < topk) {
-        uint idxy = youtidx[gid];
-        for (uint j=0; j<topk; j++) {
-          uint idxx = xoutidx[j];
-          //printf("\\nB-IDXX:%i  IDXY:%i", idxx, idxy);
-          for (uint k=0; k<msize; k++) {
-            uint xidx2 = isize*k+idxx;
-            uint yidx2 = osize*k+idxy;
-            uint colidx = idxy;
-            float addval = x[xidx2] * y[yidx2];
-            matDatat[idxy*topk+j] += addval;
-            colIdxt[idxy*topk+j] = idxx;
-            //if (gid == 0)
-            //  printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
-          }
-          rowNnzt[idxy] += 1;
-          //printf("\\nAdd NNz:%i - %i", idxy, rowNnzt[idxy]);
         }
       }
     }""")
@@ -594,27 +594,27 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     msize = grad_output.shape[0]
     osize = weight.shape[1]
 
-    dim2 = min(weight.shape[1], topk)
-    dim1 = min(weight.shape[0], topk)
-    dim2 = min(dim1,dim2)
+    dim1 = min(weight.shape[1], topkx)
+    dim2 = min(weight.shape[0], topky)
 
     x_sum_buf   = DenseTensor(np.zeros(weight.shape[0]))
     y_sum_buf   = DenseTensor(np.zeros(weight.shape[1]))
-    sdata_buf   = DenseTensor(np.zeros(weight.shape[0]*dim2))
-    sidxs_buf   = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
-    snnzs_buf   = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
+    sdata_buf   = DenseTensor(np.zeros(weight.shape[0]*dim1))
+    sidxs_buf   = DenseTensor(np.zeros(weight.shape[0]*dim1), dtype=np.uint32)
+    snnzs_buf   = DenseTensor(np.zeros(weight.shape[0]*dim1), dtype=np.uint32)
     sdatat_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2))
     sidxst_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
     snnzst_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
-    x_idx_buf   = DenseTensor(np.zeros(dim2), dtype=np.uint32)
+    x_idx_buf   = DenseTensor(np.zeros(dim1), dtype=np.uint32)
     y_idx_buf   = DenseTensor(np.zeros(dim2), dtype=np.uint32)
 
     # print('IN', DenseTensor(input).cpu().data, weight.shape, input.shape[0])
     # print('INPUT', grad_output.cpu().data)
     # print('OUT', grad_input.cpu().data)
+    # print("MSIZE:", isize, msize, osize)
 
     genwupdate4(ctx.cl_queue, [max(weight.shape[0],weight.shape[1])], None,
-      input.cl, grad_output.data.cl, x_sum_buf.data.cl, y_sum_buf.data.cl, np.uint32(isize), np.uint32(msize),np.uint32(osize), np.uint32(dim2), x_idx_buf.data.cl, y_idx_buf.data.cl,
+      input.cl, grad_output.data.cl, x_sum_buf.data.cl, y_sum_buf.data.cl, np.uint32(isize), np.uint32(msize),np.uint32(osize), np.uint32(dim1), np.uint32(dim2), x_idx_buf.data.cl, y_idx_buf.data.cl,
       sdata_buf.data.cl, sidxs_buf.data.cl, snnzs_buf.data.cl, sdatat_buf.data.cl, sidxst_buf.data.cl, snnzst_buf.data.cl)
 
     x_sum_buf.data.cl.release()
@@ -632,7 +632,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
      'data': sdata_buf.data,
      'idxs': sidxs_buf.data,
      'nnzs': snnzs_buf.data,
-     'ellw': dim2,
+     'ellw': dim1,
      'datat': sdatat_buf.data,
      'idxst': sidxst_buf.data,
      'nnzst': snnzst_buf.data,
@@ -667,7 +667,7 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
       }
     }""")
 
-    scale = 0.2
+    # scale = 0.1
 
     # updatem(ctx.cl_queue, [grad_output.shape[0],], None,
     #   weight.m.data.cl, grad_output.data.cl, np.uint32(grad_input.shape[-1]), np.uint32(grad_output.shape[1]), np.uint32(dim2), np.float32(scale), x_idx_buf.data.cl, y_idx_buf.data.cl,
