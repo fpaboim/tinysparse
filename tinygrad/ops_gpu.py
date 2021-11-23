@@ -422,6 +422,10 @@ class Matmul(Function):
     # print('INPUT', DenseTensor(grad_output).cpu().data)
     # print('OUT:', DenseTensor(grad_input).cpu().data)
 
+    # gradpy = DenseTensor(grad_weight).cpu().data
+    # print('grad_max:', gradpy.sum())
+    # asdf
+
     return grad_input, grad_weight
 
 class Conv2D(Function):

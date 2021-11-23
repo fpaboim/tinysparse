@@ -27,10 +27,12 @@ class SGD(Optimizer):
         # self.lr = self.lr * self.factor
         t.updategrad(t.grad, -self.lr)
         # if self.iter % 8 == 0:
-        #   t.prune(0.00001)
+        # t.prune(0.000001)
       else:
         # print("UPDATE GRAD", t.grad.cpu().data, self.lr)
-        self.decay = self.decay * self.factor
+        # self.decay = self.decay * self.factor
+        grad_data = t.grad.cpu().data
+        # print('grad:', grad_data[0][0], grad_data[0][1], grad_data[1][0], grad_data[-1][-1], grad_data.sum())
         t -= t.grad * self.lr
 
 class RMSprop(Optimizer):

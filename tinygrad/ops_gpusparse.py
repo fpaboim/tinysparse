@@ -396,10 +396,12 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
 
     grad_input = DenseTensor(np.zeros(input.shape), dtype=np.float32)
-    # print('GO:', grad_output.shape, weight.shape, grad_input.shape, input.shape)
+    grad_weight = DenseTensor(np.zeros(weight.shape), dtype=np.float32)
+
+    # print('GO:', input.shape, grad_output.shape)
     # print("OUTSHAPE:", weight.shape, input.shape[0], isize, msize, weight.ellwt)
 
-    grad_output = grad_output + weight.m
+    # grad_output = grad_output + weight.m
 
     matmul2 = clbuild(ctx.cl_ctx, "matmul2", """
     // DENSE x SPARSE-T
@@ -435,157 +437,103 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     # (isize,osize) x (msize,osize) = (isize,msize)
     # print('msize:', grad_output.shape, input.shape)
     matmul2(ctx.cl_queue, input.shape, None,
-      weight.data.cl, weight.idxs.cl, weight.nnzs.cl, np.uint32(weight.ellw), np.uint32(grad_output.shape[1]), np.uint32(input.shape[0]), grad_output.data.cl, grad_input.data.cl)
+      weight.data.cl, weight.idxs.cl, weight.nnzs.cl, np.uint32(weight.ellw), np.uint32(grad_output.shape[1]), np.uint32(input.shape[0]), grad_output.cl, grad_input.data.cl)
 
     # resa = np.zeros((input.shape[1], input.shape[0])).astype(np.float32)
     # cl.enqueue_copy(ctx.cl_queue, resa, grad_input.data.cl)
 
     # print('INPUT', DenseTensor(input).cpu().data, weight.shape[0], weight.shape[1])
     # print('OUT:', grad_input.cpu().data)
-    # asdf
 
-    genwupdate4 = clbuild(ctx.cl_ctx, "genwupdate4", """
-    // sorts x and y in ascending order and returns sorted indices
-    __kernel void genwupdate4(__global  float* x,     // INPUT MATRIX DATA
-                              __global  float* y,    // INPUT
-                              __global  float* xsum,    // INPUT
-                              __global  float* ysum,    // INPUT
-                              uint isize,
-                              uint msize,
-                              uint osize,
-                              uint topkx,
-                              uint topky,
-                              __global  uint*  xoutidx,
-                              __global  uint*  youtidx,
-                              __global  float* matData,     // OUTPUT MATRIX DATA
-                              __global  uint*  colIdx,
-                              __global  uint*  rowNnz,
-                              __global  float* matDatat,    // OUTPUT MATRIX DATA
-                              __global  uint*  colIdxt,
-                              __global  uint*  rowNnzt
-                              ) {
-      uint gid = get_global_id(0);
+    matmul0 = clbuild(ctx.cl_ctx, "matmul0", """
+    // multilplies x TRANSPOSED by y (dense-dense)
+    __kernel void matmul0(__global  float* x,      // INPUT MATRIX DATA
+                          __global  float* y,      // INPUT
+                          __global  float* resdata,// OUT
+                          __global  uint*  rescols,
+                          __global  uint*  resnnzs,
+                          uint ellw,
+                          uint msize,
+                          uint osize
+                          ) { // LOCAL SHARED BUFFER
+      uint isize = get_global_size(0);
+      int gidx = get_global_id(0); // row
 
-      // get for a: sum axis0  b: sum axis1 then get topk
-      ///////////////////////////////////////////////////
-      if (gid < isize) {
-        xsum[gid] = 0;
-        for (uint i=0; i<msize; i++) {
-          float val = x[i*isize+gid];
-          //if (gid == 0) {
-          //  printf("\\nADD VALx: %.2f - %i", val, i*msize+gid);
-          //}
-          xsum[gid] += val;
+      resnnzs[gidx] = 0;
+
+      for (uint gidy = 0; gidy < osize; gidy++) {
+        float ret = 0.0;
+        uint i;
+        for (i = 0; i < msize; i++) {
+          uint xidx = i*isize+gidx;
+          float xval = x[xidx];
+          uint yidx = osize*i+gidy;
+          float yval = y[yidx];
+          ret += xval*yval;
+          //if (gidx==0 && gidy==0)
+          //  printf("\\nmult: %.2f x %.2f - %.2f  -- %i/%i", xval, yval, ret, xidx, yidx);
         }
+        //if (gidx==0&&gidy==0)
+        //  printf("\\nsum:%.2f", ret);
 
-        float valx = xsum[gid];
-        uint posx = 0;
-        for (uint i = 0; i < isize; i++) {
-          float tempval = fabs(xsum[i]);
-          bool larger = tempval > fabs(valx);
-          posx += (larger)?1:0;
-        }
-        if (posx < topky) {
-          youtidx[posx] = gid;
-        }
-      }
-
-      if (gid < osize) {
-        ysum[gid] = 0;
-        for (uint i=0; i<msize; i++) {
-          float val = y[i*osize+gid];
-          //if (gid == 0) {
-          //  printf("\\nADD VALx: %.2f - %i", val, gid*osize+i);
-          //}
-          ysum[gid] += val;
-        }
-
-        float valy = ysum[gid];
-        uint posy = 0;
-        for (uint i = 0; i < osize; i++) {
-          float tempval = fabs(ysum[i]);
-          bool larger = tempval > fabs(valy);
-          posy += (larger)?1:0;
-        }
-
-        if (posy < topkx) {
-          xoutidx[posy] = gid;
-        }
-      }
-
-      if (gid < topkx) {
-        float valx = xoutidx[gid];
-        uint posx = 0;
-        for (uint i = 0; i < topkx; i++) {
-          float tempval = xoutidx[i];
-          bool larger = tempval < valx;
-          posx += (larger)?1:0;
-        }
-        xoutidx[posx] = valx;
-      }
-
-      if (gid < topky) {
-        float valy = youtidx[gid];
-        uint posy = 0;
-        for (uint i = 0; i < topky; i++) {
-          float tempval = youtidx[i];
-          bool larger = tempval < valy;
-          posy += (larger)?1:0;
-        }
-        youtidx[posy] = valy;
-      }
-
-      // only calc matrix multiplications for used grads
-      ///////////////////////////////////////////////////
-      if (gid < isize) {
-        for (uint i=0; i<topkx; i++) {
-          matData[gid*topkx+i] = 0;
-          colIdx[gid*topkx+i] = 0;
-        }
-        rowNnz[gid] = 0;
-      }
-      if (gid < osize) {
-        for (uint i=0; i<topky; i++) {
-          matDatat[gid*topky+i] = 0;
-          colIdxt[gid*topky+i] = 0;
-        }
-        rowNnzt[gid] = 0;
-      }
-
-
-      if (gid < topkx) {
-        uint idxx = xoutidx[gid];
-        for (uint j=0; j<topky; j++) {
-          uint idxy = youtidx[j];
-          //printf("\\n[%i] IDXX:%i  IDXY:%i", j, idxx, idxy);
-          for (uint k=0; k<msize; k++) {
-            uint xidx2 = isize*k+idxy;
-            uint yidx2 = osize*k+idxx;
-            uint colidx = idxy;
-            matDatat[idxx*topky+j] += x[xidx2] * y[yidx2];
-            colIdxt[idxx*topky+j] = idxy;
-            //if (gid == 0)
-            //  printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
+        uint nnz = resnnzs[gidx];
+        for (i = 0; i < nnz; i++) {
+          if (rescols[i] >= gidy) {
+            break;
           }
-          rowNnzt[idxx] += 1;
-        }
-      }
-      if (gid < topky) {
-        uint idxx = youtidx[gid];
-        for (uint j=0; j<topkx; j++) {
-          uint idxy = xoutidx[j];
-          //printf("\\nIDXX:%i  IDXY:%i", idxx, idxy);
-          for (uint k=0; k<msize; k++) {
-            uint xidx2 = isize*k+idxx;
-            uint yidx2 = osize*k+idxy;
-            uint colidx = idxy;
-            matData[idxx*topkx+j] += x[xidx2] * y[yidx2];
-            colIdx[idxx*topkx+j] = idxy;
-            //if (gid == 0)
-            //  printf("\\n ADD VAL:%.2f,%.2f - (%i,%i) - (%i,%i,%i)", x[xidx2], y[yidx2], idxx, idxy, gid, j, k);
+          for (uint j = nnz; j >= i; j--) {
+            //resdata[j+1] = resdata[j];
           }
-          rowNnz[idxx] += 1;
         }
+
+        resdata[gidx * ellw + i] = ret;
+        rescols[gidx * ellw + i] = gidy;
+        resnnzs[gidx] += 1;
+      }
+    }""")
+    matmul0t = clbuild(ctx.cl_ctx, "matmul0t", """
+    // multilplies x TRANSPOSED by y (dense-dense)
+    __kernel void matmul0t(__global  float* x,      // INPUT MATRIX DATA
+                          __global  float* y,      // INPUT
+                          __global  float* resdata,// OUT
+                          __global  uint*  rescols,
+                          __global  uint*  resnnzs,
+                          uint ellw,
+                          uint msize,
+                          uint isize
+                          ) { // LOCAL SHARED BUFFER
+      uint osize = get_global_size(0);
+      int gidy = get_global_id(0); // row
+
+      resnnzs[gidy] = 0;
+      for (uint gidx = 0; gidx < isize; gidx++) {
+        float ret = 0.0;
+        uint i;
+        for (i = 0; i < msize; i++) {
+          uint xidx = i*isize+gidx;
+          float xval = x[xidx];
+          uint yidx = osize*i+gidy;
+          float yval = y[yidx];
+          ret += xval*yval;
+          //if (gidx==0 && gidy==0)
+          //  printf("\\nmult: %.2f x %.2f - %.2f  -- %i/%i", xval, yval, ret, xidx, yidx);
+        }
+        //if (gidx==0&&gidy==0)
+        //  printf("\\nsum:%.2f", ret);
+
+        // add for
+        uint nnz = resnnzs[gidy];
+        for (i = 0; i < nnz; i++) {
+          if (rescols[i] >= gidx) {
+            break;
+          }
+          for (uint j = nnz; j >= i; j--) {
+            //resdata[j+1] = resdata[j];
+          }
+        }
+        resdata[gidy * ellw + i] = ret;
+        rescols[gidy * ellw + i] = gidx;
+        resnnzs[gidy] += 1;
       }
     }""")
 
@@ -594,31 +542,30 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     msize = grad_output.shape[0]
     osize = weight.shape[1]
 
-    dim1 = min(weight.shape[1], topkx)
-    dim2 = min(weight.shape[0], topky)
+    dim1 = weight.shape[1]#min(weight.shape[1], topkx)
+    dim2 = weight.shape[0]#min(weight.shape[0], topky)
 
-    x_sum_buf   = DenseTensor(np.zeros(weight.shape[0]))
-    y_sum_buf   = DenseTensor(np.zeros(weight.shape[1]))
+    # x_sum_buf   = DenseTensor(np.zeros(weight.shape[0]))
+    # y_sum_buf   = DenseTensor(np.zeros(weight.shape[1]))
     sdata_buf   = DenseTensor(np.zeros(weight.shape[0]*dim1))
     sidxs_buf   = DenseTensor(np.zeros(weight.shape[0]*dim1), dtype=np.uint32)
     snnzs_buf   = DenseTensor(np.zeros(weight.shape[0]*dim1), dtype=np.uint32)
-    sdatat_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2))
-    sidxst_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
-    snnzst_buf  = DenseTensor(np.zeros(weight.shape[0]*dim2), dtype=np.uint32)
-    x_idx_buf   = DenseTensor(np.zeros(dim1), dtype=np.uint32)
-    y_idx_buf   = DenseTensor(np.zeros(dim2), dtype=np.uint32)
+    sdatat_buf  = DenseTensor(np.zeros(weight.shape[1]*dim2))
+    sidxst_buf  = DenseTensor(np.zeros(weight.shape[1]*dim2), dtype=np.uint32)
+    snnzst_buf  = DenseTensor(np.zeros(weight.shape[1]*dim2), dtype=np.uint32)
+    # x_idx_buf   = DenseTensor(np.zeros(dim1), dtype=np.uint32)
+    # y_idx_buf   = DenseTensor(np.zeros(dim2), dtype=np.uint32)
 
     # print('IN', DenseTensor(input).cpu().data, weight.shape, input.shape[0])
     # print('INPUT', grad_output.cpu().data)
-    # print('OUT', grad_input.cpu().data)
+    # print('OUT', grad_input.cpu().data.sum())
     # print("MSIZE:", isize, msize, osize)
 
-    genwupdate4(ctx.cl_queue, [max(weight.shape[0],weight.shape[1])], None,
-      input.cl, grad_output.data.cl, x_sum_buf.data.cl, y_sum_buf.data.cl, np.uint32(isize), np.uint32(msize),np.uint32(osize), np.uint32(dim1), np.uint32(dim2), x_idx_buf.data.cl, y_idx_buf.data.cl,
-      sdata_buf.data.cl, sidxs_buf.data.cl, snnzs_buf.data.cl, sdatat_buf.data.cl, sidxst_buf.data.cl, snnzst_buf.data.cl)
+    matmul0(ctx.cl_queue, [isize], None, input.cl, grad_output.cl, sdata_buf.data.cl, sidxs_buf.data.cl, snnzs_buf.data.cl, np.uint32(dim1), np.uint32(msize), np.uint32(osize))
+    matmul0t(ctx.cl_queue, [osize], None, input.cl, grad_output.cl, sdatat_buf.data.cl, sidxst_buf.data.cl, snnzst_buf.data.cl, np.uint32(dim2), np.uint32(msize), np.uint32(isize))
 
-    x_sum_buf.data.cl.release()
-    y_sum_buf.data.cl.release()
+    # x_sum_buf.data.cl.release()
+    # y_sum_buf.data.cl.release()
     # sdata_buf.data.cl.release()
     # sidxs_buf.data.cl.release()
     # snnzs_buf.data.cl.release()
@@ -638,34 +585,40 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
      'nnzst': snnzst_buf.data,
      'ellwt': dim2,
     }
+
     w_grad = SparseTensor(from_datas=newdata, shape=weight.shape)
+    # gradpy = w_grad.to_numpy()
+    # print('grad_max:', w_grad.shape, gradpy.sum())
+    # gradpy = w_grad.to_numpy(dual=True)
+    # print('grad_max:', w_grad.shape, gradpy.sum())
+    # asdf
 
-    updatem = clbuild(ctx.cl_ctx, "updatem", """
-    // sorts x and y in ascending order and returns sorted indices
-    __kernel void updatem(__global  float* m,     // INPUT MATRIX DATA
-                          __global  float* grad,     // INPUT MATRIX DATA
-                          uint msize,
-                          uint osize,
-                          uint topk,
-                          float scale,
-                          __global  uint*  xoutidx,
-                          __global  uint*  youtidx,
-                          __global  float* matData,     // OUTPUT MATRIX DATA
-                          __global  uint*  colIdx,
-                          __global  uint*  rowNnz
-                          ) {
-      uint gid = get_global_id(0);
-      uint nnz = rowNnz[gid];
+    # updatem = clbuild(ctx.cl_ctx, "updatem", """
+    # // sorts x and y in ascending order and returns sorted indices
+    # __kernel void updatem(__global  float* m,     // INPUT MATRIX DATA
+    #                       __global  float* grad,     // INPUT MATRIX DATA
+    #                       uint msize,
+    #                       uint osize,
+    #                       uint topk,
+    #                       float scale,
+    #                       __global  uint*  xoutidx,
+    #                       __global  uint*  youtidx,
+    #                       __global  float* matData,     // OUTPUT MATRIX DATA
+    #                       __global  uint*  colIdx,
+    #                       __global  uint*  rowNnz
+    #                       ) {
+    #   uint gid = get_global_id(0);
+    #   uint nnz = rowNnz[gid];
 
-      for (uint i=0; i<osize; i++) {
-        m[osize*gid+i] = scale * grad[osize*gid+i];
-      }
-      for (uint i=0; i<nnz; i++) {
-        uint col = colIdx[gid*topk+i];
-        float val = matData[gid*topk+i];
-        m[osize*gid+col] -= val*scale;
-      }
-    }""")
+    #   for (uint i=0; i<osize; i++) {
+    #     m[osize*gid+i] = scale * grad[osize*gid+i];
+    #   }
+    #   for (uint i=0; i<nnz; i++) {
+    #     uint col = colIdx[gid*topk+i];
+    #     float val = matData[gid*topk+i];
+    #     m[osize*gid+col] -= val*scale;
+    #   }
+    # }""")
 
     # scale = 0.1
 

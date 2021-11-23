@@ -163,7 +163,7 @@ class SparseTensor(Tensor):
     # print('ellw:', ellwidth, shape)
     cols = {}
     for row in range(shape[0]):
-      rowdata = np.random.rand(nnzs) / 1000
+      rowdata = np.random.rand(nnzs) / 10000
       rowidx = sorted(np.random.permutation(shape[1])[:nnzs])
 
       i = 0
@@ -292,6 +292,7 @@ class SparseTensor(Tensor):
     res= np.zeros(dim).astype(np.uint32)
     cl.enqueue_copy(cl_queue, res, self.nnzs.cl)
     # print('RES:', res.sum())
+
     return res
 
   def count_nnzs(self):
@@ -396,38 +397,39 @@ class SparseTensor(Tensor):
       uint baseidxd = gid*ellwidthAdd;
 
       uint nnzadd = rowNnzAdd[gid];
-      //printf("\\nNNZs: %i   GID:%i", nnzadd, gid);
 
+      uint m = 0;
       for (uint i=0; i<nnzadd; i++) {
         float addval = matDataAdd[baseidxd+i] * lr;
         uint addcol = colIdxAdd[baseidxd+i];
 
-        uint refcol = colIdx[baseidxs+i];
-        uint m = 0;
-        while (addcol > refcol) {
-          m += 1;
-          refcol = colIdx[baseidxs+i+m];
-        }
-
-        //printf("\\nADD VAL:%.2f  ADDCOL:%i  idxs/d:(%i/%i)  gid/i:(%i/%i)", addval, addcol, baseidxs, baseidxd, gid,i);
         if (addval == 0.0) {
           //printf("\\nZERO VAL, CONT: %.2f - %i", addval, gid);
           continue;
         }
+
+        uint refcol = colIdx[baseidxs+i];
+        m = 0;
+        while (refcol < addcol && (i+m) < nnz) {
+          m += 1;
+          refcol = colIdx[baseidxs+i+m];
+        }
+
+        //if (gid == 0)
+        //  printf("\\nADD VAL:%.2f  ADDCOL:%i  ref:(%i)  gid/i/m:(%i/%i%i)", addval, addcol, refcol, gid,i,m);
+
         if (addcol == refcol) {
           matData[baseidxs+i+m] += addval;
-          //printf("\\nINCREMENT: %.2f",addval);
+          //if (gid == 0)
+          //  printf("\\nINCREMENT: %.2f",addval);
+          continue;
         } else {
+          //if (gid == 0)
+          //  printf("\\nADD: %.2f %i-%i",addval, addcol, refcol);
           if (rowNnz[gid] >= ellwidth) {
             break;
           }
-          if (addcol > refcol) {
-            rowNnz[gid] += 1;
-            //printf("\\nSET VAL0:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
-            matData[baseidxs+i+m] = addval;
-            colIdx[baseidxs+i+m] = addcol;
-            continue;
-          }
+
           for (uint j=nnz; j>i+m; j--) {
             //printf("\\nMOVE:%.2f", matData[baseidx+j-1]);
             colIdx[baseidxs+j] = colIdx[baseidxs+j-1];
@@ -436,34 +438,36 @@ class SparseTensor(Tensor):
           rowNnz[gid] += 1;
           nnz = rowNnz[gid];
 
-          //printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, colIdx[i]);
+          //if (gid == 0)
+          //  printf("\\nSET VAL:%.2f idx:%i/%i  col:%i", addval, baseidxs+i, baseidxd+i, addcol);
           matData[baseidxs+i+m] = addval;
           colIdx[baseidxs+i+m] = addcol;
-          if (nnz >= ellwidth)
-            break;
         }
       }
     }""").build().__getattr__('adddense')
 
-    dim1 = min(self.shape[1], topkx)
-    dim2 = min(self.shape[0], topky)
+    # dim1 = min(self.shape[1], topkx)
+    # dim2 = min(self.shape[0], topky)
+    dim1 = self.shape[1]
+    dim2 = self.shape[0]
 
     # (isize,msize) x (isize,osize) = (msize,osize)
-    # print('grad:', grad)
+    # grad_data = grad.to_numpy()
+    # print('grad:', grad_data[0][0], grad_data[0][1], grad_data[1][0], grad_data[-1][-1], grad_data.sum())
     adddense(cl_queue, [grad.shape[1]], None,
       self.datat.cl, self.idxst.cl, self.nnzst.cl, np.float32(lr), np.uint32(self.ellwt),
-      grad.datat.cl, grad.idxst.cl, grad.nnzst.cl, np.uint32(dim2))
+      grad.datat.cl, grad.idxst.cl, grad.nnzst.cl, np.uint32(grad.ellwt))
 
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # print('grad:', grad)
     adddense(cl_queue, [grad.shape[0]], None,
       self.data.cl, self.idxs.cl, self.nnzs.cl, np.float32(lr), np.uint32(self.ellw),
-      grad.data.cl, grad.idxs.cl, grad.nnzs.cl, np.uint32(dim1))
+      grad.data.cl, grad.idxs.cl, grad.nnzs.cl, np.uint32(grad.ellw))
     # self._ctx = None
 
   def to_(self, device):
-    self.data, self.device = self._move_data(self.data, device), device
+    # self.data, self.device = self._move_data(self.data, device), device
     if self.grad: self.grad.to_(device)
 
   def to(self, device):

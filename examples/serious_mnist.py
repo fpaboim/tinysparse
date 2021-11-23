@@ -16,11 +16,13 @@ GPU = True
 QUICK = False
 DEBUG = False
 
+np.random.seed(42)
+
 # import networkx as nx
 # G = nx.generators.random_graphs.fast_gnp_random_graph(784, .8, seed=3)
 # m = nx.to_numpy_matrix(G)[:,:10] / 100
 # print(m.shape)
-dummy = DenseTensor.uniform(784,10).cpu().data
+dummy = DenseTensor.uniform(784,32).cpu().data
 
 class MLP:
   def __init__(self):
@@ -32,7 +34,7 @@ class MLP:
     # self.weight1 = DenseTensor.uniform(784,10)
     # self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.001)
     # self.weight2 = SparseTensor.uniform(128,10,randsparsity=0.1)
-    # self.weight2 = DenseTensor.uniform(128,10)
+    self.weight2 = DenseTensor.uniform(32,10)
     # self.weight2 = SparseTensor.uniform(64,10,randsparsity=0.1)
     # self.weight2 = SparseTensor(w_init2)
 
@@ -41,14 +43,14 @@ class MLP:
 
   def forward(self, x):
     x = x.dot(self.weight1)
-    # x = x.dot(self.weight2)
+    x = x.dot(self.weight2)
     x = x.logsoftmax()
     return x
 
 if __name__ == "__main__":
   lrs = [1e-4] #if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
   epochs = 100
-  BS = 64
+  BS = 32
 
   lmbd = 0.00025
   lossfn = lambda out,y: sparse_categorical_crossentropy(out, y)
@@ -73,7 +75,7 @@ if __name__ == "__main__":
     params = get_parameters(model)
     [x.gpu_() for x in params]
 
-  optimizer = optim.SGD(model.parameters(), lr=.00001)
+  optimizer = optim.SGD(model.parameters(), lr=.0001)
   for epoch in range(1,epochs+1):
     #first epoch without augmentation
     X_aug = X_train #if epoch == 1 else augment_img(X_train)
