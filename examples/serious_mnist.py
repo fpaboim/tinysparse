@@ -29,8 +29,8 @@ class MLP:
     # w_init  = np.random.randn(784,10).astype(np.float32) / 1000
     # w_init2 = np.random.randn(BS,10).astype(np.float32) / 1000
 
-    # self.weight1 = SparseTensor(dummy)
-    self.weight1 = DenseTensor(dummy)
+    self.weight1 = SparseTensor(dummy)
+    # self.weight1 = DenseTensor(dummy)
     # self.weight1 = DenseTensor.uniform(784,10)
     # self.weight1 = SparseTensor.uniform(784,64,randsparsity=0.5)
     # self.weight1b = DenseTensor.uniform(64,64)
