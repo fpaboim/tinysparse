@@ -22,19 +22,20 @@ np.random.seed(42)
 # G = nx.generators.random_graphs.fast_gnp_random_graph(784, .8, seed=3)
 # m = nx.to_numpy_matrix(G)[:,:10] / 100
 # print(m.shape)
-dummy = DenseTensor.uniform(784,32).cpu().data
+dummy = DenseTensor.uniform(784,64).cpu().data
 
 class MLP:
   def __init__(self):
     # w_init  = np.random.randn(784,10).astype(np.float32) / 1000
     # w_init2 = np.random.randn(BS,10).astype(np.float32) / 1000
 
-    self.weight1   = SparseTensor(dummy)
-    # self.weight1 = DenseTensor(dummy)
+    # self.weight1 = SparseTensor(dummy)
+    self.weight1 = DenseTensor(dummy)
     # self.weight1 = DenseTensor.uniform(784,10)
-    # self.weight1 = SparseTensor.uniform(784,10,randsparsity=0.001)
+    # self.weight1 = SparseTensor.uniform(784,64,randsparsity=0.5)
+    # self.weight1b = DenseTensor.uniform(64,64)
     # self.weight2 = SparseTensor.uniform(128,10,randsparsity=0.1)
-    self.weight2 = DenseTensor.uniform(32,10)
+    self.weight2 = DenseTensor.uniform(64,10)
     # self.weight2 = SparseTensor.uniform(64,10,randsparsity=0.1)
     # self.weight2 = SparseTensor(w_init2)
 
@@ -43,6 +44,7 @@ class MLP:
 
   def forward(self, x):
     x = x.dot(self.weight1)
+    # x = x.dot(self.weight1b)
     x = x.dot(self.weight2)
     x = x.logsoftmax()
     return x

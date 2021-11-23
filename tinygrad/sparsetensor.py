@@ -7,9 +7,6 @@ import numpy as np
 from .tensor import Device, Tensor
 from .densetensor import DenseTensor, GPUBuffer, require_init_gpu, cl_ctx, cl_queue, ane
 
-topkx = 10
-topky = 784
-
 require_init_gpu()
 
 # **** profiler ****
@@ -48,7 +45,7 @@ class SparseTensor(Tensor):
   ops = defaultdict(dict)
 
   def __init__(self, dense_data=[], from_datas={}, idxs=[], nnzs=[], ellw=None,
-               shape=None, randinit=[], randsparsity=0.01, bs=32, device=DEFAULT_DEVICE, requires_grad=True, ctx=None):
+               shape=None, randinit=[], randsparsity=0.01, bs=32, device=DEFAULT_DEVICE, requires_grad=True, ctx=None, topkx=None, topky=None):
     self.device = device
 
     if len(randinit)==0:
@@ -91,6 +88,15 @@ class SparseTensor(Tensor):
     self.m = None # m matrix for memoized backprop (meprop alt.)
 
     # internal variables used for autograd graph construction
+    if not topkx:
+      self.topkx = self.shape[1]
+    else:
+      self.topkx = min(self.shape[1],topkx)
+
+    if not topky:
+      self.topky = self.shape[0]
+    else:
+      self.topky = min(self.shape[0],topky)
     self._ctx = ctx
 
   def __repr__(self):
@@ -446,10 +452,6 @@ class SparseTensor(Tensor):
       }
     }""").build().__getattr__('adddense')
 
-    # dim1 = min(self.shape[1], topkx)
-    # dim2 = min(self.shape[0], topky)
-    dim1 = self.shape[1]
-    dim2 = self.shape[0]
 
     # (isize,msize) x (isize,osize) = (msize,osize)
     # grad_data = grad.to_numpy()

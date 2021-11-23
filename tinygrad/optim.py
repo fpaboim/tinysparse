@@ -26,8 +26,8 @@ class SGD(Optimizer):
 
         # self.lr = self.lr * self.factor
         t.updategrad(t.grad, -self.lr)
-        # if self.iter % 8 == 0:
-        # t.prune(0.000001)
+        if self.iter % 8 == 0:
+          t.prune(0.000001)
       else:
         # print("UPDATE GRAD", t.grad.cpu().data, self.lr)
         # self.decay = self.decay * self.factor
