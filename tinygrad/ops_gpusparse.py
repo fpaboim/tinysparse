@@ -336,8 +336,8 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     # print(input.shape, weight.shape)
     # assert weight.shape[-2] == input.shape[-1]
 
-    if not weight.m:
-      weight.m = DenseTensor(np.zeros((input.shape[0], weight.shape[1])))
+    # if not weight.m:
+    #   weight.m = DenseTensor(np.zeros((input.shape[0], weight.shape[1])))
 
     isize, msize, osize = i32(input.shape[-2]), i32(input.shape[-1]), i32(weight.shape[-1])
     outshape = np.array([input.shape[-2], weight.shape[-1]])
@@ -713,19 +713,20 @@ class Matmul(SparseFunction): # input and weights are swapped, legacy..
     #                       ) {
     #   uint gid = get_global_id(0);
     #   uint nnz = rowNnz[gid];
-    #   for (uint i=0; i<osize; i++) {
-    #     m[osize*gid+i] = scale * grad[osize*gid+i];
-    #   }
     #   for (uint i=0; i<nnz; i++) {
     #     uint col = colIdx[gid*topk+i];
     #     float val = matData[gid*topk+i];
-    #     m[osize*gid+col] -= val*scale;
+    #     m[osize*gid+col] = 0;
+    #   }
+    #   for (uint i=0; i<osize; i++) {
+    #     m[osize*gid+i] = scale * grad[osize*gid+i];
     #   }
     # }""")
-    # scale = 0.2
+    # scale = 0.9
     # updatem(ctx.cl_queue, [grad_output.shape[0],], None,
     #   weight.m.data.cl, grad_output.data.cl, np.uint32(grad_input.shape[-1]), np.uint32(grad_output.shape[1]), np.uint32(topky), np.float32(scale), xs_idx_buf.data.cl, ys_idx_buf.data.cl,
     #   sdata_buf.data.cl, sidxs_buf.data.cl, snnzs_buf.data.cl)
+
 
     return w_grad, grad_input
 
