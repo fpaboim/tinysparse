@@ -16,12 +16,12 @@ def sparse_categorical_crossentropy(out, Y):
   return out.mul(y).mean()
 
 def pretrain(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
-        transform=lambda x: x, target_transform=lambda x: x):
-  DenseTensor.training = False
+        transform=lambda x: x, target_transform=lambda x: x, pretrain_steps=64):
+  DenseTensor.training = True
   SparseTensor.training = True
   losses, accuracies = [], []
   for i in (t := trange(steps, disable=os.getenv('CI') is not None)):
-    if i > 64:
+    if i > pretrain_steps:
       break
     samp = np.random.randint(0, X_train.shape[0], size=(BS))
     x = DenseTensor(transform(X_train[samp]))

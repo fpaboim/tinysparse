@@ -31,10 +31,11 @@ class MLP:
 
     # self.weight1 = SparseTensor(dummy, topkx=128, topky=128)
     # self.weight1 = DenseTensor(dummy)
-    # self.weight1 = DenseTensor.uniform(784,784)
-    self.weight1 = SparseTensor.uniform(784,784, randsparsity=0.7, topkx=32, topky=32, should_accgrad=True, ellwidth=512, ellwidtht=784)
+    self.weight1 = DenseTensor.uniform(784,784)
+    # self.weight1 = SparseTensor.uniform(784,784, randsparsity=0.7, topkx=128, topky=128, should_accgrad=True, ellwidth=128, ellwidtht=128)
     # self.weight1b = SparseTensor.uniform(784,784, randsparsity=0.6, topkx=256, topky=256, should_accgrad=True)
-    # self.weight1b = SparseTensor.uniform(1024,784, randsparsity=0.65, topkx=256, topky=256)
+    # self.weight1b = SparseTensor.uniform(784,784, randsparsity=0.7, topkx=128, topky=128, should_accgrad=True, ellwidth=128, ellwidtht=128)
+    self.weight1b = DenseTensor.uniform(784,784)
     # self.weight2 = SparseTensor.uniform(128,10,randsparsity=0.1)
     self.weight2 = DenseTensor.uniform(784,10)
     # self.weight2 = SparseTensor.uniform(512,10,randsparsity=0.01)
@@ -44,8 +45,8 @@ class MLP:
     return get_parameters(self)
 
   def forward(self, x):
-    x = x.dot(self.weight1)
-    # x = x.dot(self.weight1b)
+    x = x.dot(self.weight1).relu()
+    x = x.dot(self.weight1b).relu()
     x = x.dot(self.weight2)
     x = x.logsoftmax()
     return x
@@ -54,6 +55,9 @@ if __name__ == "__main__":
   lrs = [1e-4] #if QUICK else [1e-3, 1e-4, 1e-5, 1e-5]
   epochs = 100
   BS = 64
+  PRETRAIN = False
+  PRETRAIN_STEPS = 256
+  PRETRAIN_BS = 1
 
   lmbd = 0.00025
   lossfn = lambda out,y: sparse_categorical_crossentropy(out, y)
@@ -84,8 +88,12 @@ if __name__ == "__main__":
   optimizer = optim.SGD(model.parameters(), lr=.04)
   optimizerp = optim.SGDp(model.parameters(), lr=.04)
 
-  # pretrain(model, X_train, Y_train, optimizerp, steps=len(X_train),  BS=1)
-  # model.weight1.reset(model.weight1.accgrad.to_numpy())
+  if PRETRAIN:
+    pretrain(model, X_train, Y_train, optimizerp, steps=len(X_train)//PRETRAIN_BS, BS=PRETRAIN_BS, pretrain_steps=PRETRAIN_STEPS)
+    accgrad = model.weight1.accgrad.to_numpy()
+    accgrad *= -1.2
+    model.weight1.reset(accgrad)
+    # model.weight1.updategrad(model.weight1.accgrad, -1)
   for epoch in range(1,epochs+1):
     #first epoch without augmentation
     train(model, X_train, Y_train, optimizer, steps=steps,  BS=BS)

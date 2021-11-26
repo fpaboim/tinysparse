@@ -200,7 +200,7 @@ class SparseTensor(Tensor):
     # print('ellw:', ellwidth, shape)
     cols = {}
     for row in range(shape[0]):
-      rowdata = (np.random.rand(nnzs)-0.5) / 1000
+      rowdata = (np.random.standard_normal(nnzs)) / 1000
       rowidx = sorted(np.random.permutation(shape[1])[:nnzs])
 
       i = 0
@@ -482,7 +482,7 @@ class SparseTensor(Tensor):
           //if (fabs(matData[baseidxs+i+m]) < fabs(addval)) {
           //  matData[baseidxs+i+m] = addval;
           //}
-          matData[baseidxs+i+m] = 0.11*addval + 0.9*matData[baseidxs+i+m];
+          matData[baseidxs+i+m] = 0.05*addval + 0.95*matData[baseidxs+i+m];
           continue;
         } else {
           if (rowNnz[gid] >= ellwidth) {

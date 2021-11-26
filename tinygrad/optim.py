@@ -33,19 +33,19 @@ class SGDp(Optimizer):
         # if self.iter % 4 == 0:
         #   t.prune(0.00001)
 
-        if self.iter % 1 == 0:
+        if self.iter % 4 == 0:
           np.random.seed(self.iter)
           t.reset()
         if t.should_accgrad:
           if not t.accgrad:
             t.accgrad = SparseTensor(np.zeros((t.shape[0], t.shape[1])), ellwidth=t.ellw, ellwidtht=t.ellwt)
           else:
-            t.accgrad.updategradacc(t.grad, -1)
+            t.accgrad.updategradacc(t.grad, 1)
             # t.accgrad.updategrad(t.grad, 1)
-            # if self.iter % 4 == 0:
-            #   t.accgrad.scale(0.999)
+            if self.iter % 2 == 0:
+              t.accgrad.scale(0.98)
             # if self.iter % 16 == 0:
-            # t.accgrad.prune(0.0001)
+            t.accgrad.prune(0.01)
 
       else:
         # print("UPDATE GRAD", t.grad.cpu().data, self.lr)
