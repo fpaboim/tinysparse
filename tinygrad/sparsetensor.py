@@ -200,7 +200,7 @@ class SparseTensor(Tensor):
     # print('ellw:', ellwidth, shape)
     cols = {}
     for row in range(shape[0]):
-      rowdata = (np.random.standard_normal(nnzs)) / 1000
+      rowdata = (np.random.standard_normal(nnzs)) / (shape[1])
       rowidx = sorted(np.random.permutation(shape[1])[:nnzs])
 
       i = 0

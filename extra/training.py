@@ -17,13 +17,15 @@ def sparse_categorical_crossentropy(out, Y):
 
 def pretrain(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
         transform=lambda x: x, target_transform=lambda x: x, pretrain_steps=64):
-  DenseTensor.training = True
+  DenseTensor.training = False
   SparseTensor.training = True
   losses, accuracies = [], []
+
+  randperm = np.random.permutation(range(X_train.shape[0]))
   for i in (t := trange(steps, disable=os.getenv('CI') is not None)):
     if i > pretrain_steps:
       break
-    samp = np.random.randint(0, X_train.shape[0], size=(BS))
+    samp = randperm[i*BS:(i+1)*BS]
     x = DenseTensor(transform(X_train[samp]))
     y = target_transform(Y_train[samp])
 
@@ -44,24 +46,29 @@ def pretrain(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_catego
     losses.append(loss)
     accuracies.append(accuracy)
     try:
-      nnzs = model.weight1.count_nnzs()
-      if model.weight1.accgrad:
-        gradnnzs = model.weight1.accgrad.count_nnzs()
-        t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i  accgrad_nnz:%i" % (np.array(losses)[-4:].mean(), np.array(accuracies)[-4:].mean(), nnzs, gradnnzs))
+      nnzs = 0
+      gradnnzs = 0
+      for weight in model.layers:
+        nnzs += weight.count_nnzs()
+        gradnnzs += weight.accgrad.count_nnzs()
+        t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i accgrad_nnz:%i" % (np.array(losses)[-4:].mean(), np.array(accuracies)[-4:].mean(), nnzs, gradnnzs))
       else:
         t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i" % (np.array(losses)[-4:].mean(), np.array(accuracies)[-4:].mean(), nnzs))
     except Exception as e:
-      t.set_description("loss:%.2f  accuracy:%.2f  " % (np.array(losses)[-4:].mean(), np.array(accuracies)[-4:].mean()))
+      t.set_description("loss:%.2f  accuracy:%.2f" % (np.array(losses)[-4:].mean(), np.array(accuracies)[-4:].mean()))
 
 def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categorical_crossentropy,
         transform=lambda x: x, target_transform=lambda x: x):
   DenseTensor.training = True
   SparseTensor.training = True
   losses, accuracies = [], []
+
+  randperm = np.random.permutation(range(X_train.shape[0]))
   for i in (t := trange(steps, disable=os.getenv('CI') is not None)):
     # if i > 2:
     #   break
-    samp = np.random.randint(0, X_train.shape[0], size=(BS))
+    # samp = np.random.randint(0, X_train.shape[0], size=(BS))
+    samp = randperm[i*BS:(i+1)*BS]
     x = DenseTensor(transform(X_train[samp]))
     y = target_transform(Y_train[samp])
 
@@ -82,14 +89,15 @@ def train(model, X_train, Y_train, optim, steps, BS=128, lossfn=sparse_categoric
     losses.append(loss)
     accuracies.append(accuracy)
     try:
-      nnzs = model.weight1.count_nnzs()
-      if model.weight1.accgrad:
-        gradnnzs = model.weight1.accgrad.count_nnzs()
-        t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i  accgrad_nnz:%i" % (np.array(losses)[-32:].mean(), np.array(accuracies)[-32:].mean(), nnzs, gradnnzs))
-      else:
-        t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i" % (np.array(losses)[-32:].mean(), np.array(accuracies)[-32:].mean(), nnzs))
+      nnzs = 0
+      gradnnzs = 0
+      for weight in model.layers:
+        # print("LAYER:", weight)
+        nnzs += weight.count_nnzs()
+        # gradnnzs += weight.accgrad.count_nnzs()
+        t.set_description("loss:%.2f  accuracy:%.2f  nnz:%i" % (np.array(losses)[-4:].mean(), np.array(accuracies)[-4:].mean(), nnzs))
     except Exception as e:
-      t.set_description("loss:%.2f  accuracy:%.2f  " % (np.array(losses)[-32:].mean(), np.array(accuracies)[-32:].mean()))
+      t.set_description("loss:%.2f  accuracy:%.2f" % (np.array(losses)[-4:].mean(), np.array(accuracies)[-4:].mean()))
 
 def evaluate(model, X_test, Y_test, num_classes=None, BS=128, return_predict=False, transform=lambda x: x,
              target_transform=lambda y: y):

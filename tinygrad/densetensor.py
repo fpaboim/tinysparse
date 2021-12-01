@@ -296,6 +296,8 @@ class DenseTensor(Tensor):
     else:
       return self
 
+
+
   def softplus(self, limit=20, beta=1):
     # safe softplus - 1/beta*log(1 + exp(beta*x)) (PyTorch)
     eb = (self*beta).exp()

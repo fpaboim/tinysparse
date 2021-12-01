@@ -30,6 +30,16 @@ def unary_op(ctx, code, x):
   unop(ctx.cl_queue, [np.prod(ret.shape)], None, x.cl, ret.cl)
   return ret
 
+class SeLU(Function):
+  def forward(ctx, input):
+    ret = unary_op(ctx, '(a >=0) ? a : exp(a);', input)
+    ctx.save_for_backward(ret)
+    return ret
+
+  def backward(ctx, grad_output):
+    input, = ctx.saved_tensors
+    return binary_op(ctx, '(a >=0) ? 1 : exp(b);', grad_output, input)
+
 class ReLU(Function):
   def forward(ctx, input):
     ctx.save_for_backward(input)
@@ -37,7 +47,7 @@ class ReLU(Function):
 
   def backward(ctx, grad_output):
     input, = ctx.saved_tensors
-    return binary_op(ctx, '(b >=0) ? a : 0;', grad_output, input)
+    return binary_op(ctx, '(a >=0) ? a : 0;', grad_output, input)
 
 class Log(Function):
   def forward(ctx, input):
@@ -264,65 +274,15 @@ def perm_axis(ctx, inp, order):
   perm(ctx.cl_queue, [np.prod(osize)], None, inp.cl, ret.cl, i32(len(osize)),
     buffer_np(ctx, np.array(inp.shape, dtype=np.int32)),
     buffer_np(ctx, np.array(order, dtype=np.int32)))
-
-  # print("PERM RET:", ret)
   return ret
-
-def trans_axis(ctx, inp, order):
-  osize = np.array(inp.shape)[list(order)]
-  ret = buffer_new(ctx, osize)
-  trans = clbuild(ctx.cl_ctx, "trans", """
-    __kernel void trans(__global float *a_g,
-                        __global float *res_g,
-                        uint width) {
-      int row = get_global_id(0);
-      for(uint i=0; i<width; i++) {
-        //printf("\\nSET:%i-%i", row, i);
-        res_g[row*width+i] = 0;
-      }
-    }""")
-  trans(ctx.cl_queue, [osize[1]], None, inp.cl, ret.cl, np.uint32(osize[0]))
-
-  # print("PERM RET:", ret)
-  return ret
-
-class Transpose(Function):
-  def forward(ctx, inp, order=(1,0)):
-    # print("INP T:", inp)
-    osize = np.array(inp.shape).T
-    # print('osize:', osize)
-    ret = buffer_new(ctx, osize)
-    transpose = clbuild(ctx.cl_ctx, "transpose", """
-    __kernel void transpose(__global float *a_g,
-                            __global float *res_g,
-                            uint width) {
-      int row = get_global_id(0);
-      for(uint i=0; i<width; i++) {
-        //printf("\\nSET:%i-%i", row, i);
-        res_g[i*width+row] = a_g[row*width+i] ;
-      }
-    }""")
-
-    ctx.save_for_backward(transpose, inp.shape)
-
-    transpose(ctx.cl_queue, [inp.shape[0]], None, inp.cl, ret.cl, np.uint32(inp.shape[1]))
-    # print("RET:", ret)
-    return ret
-
-  def backward(ctx, grad_output):
-    transpose,inpshape = ctx.saved_tensors
-    ret = buffer_new(ctx, inpshape)
-    transpose(ctx.cl_queue, [inpshape[1]], None, grad_output.cl, ret.cl, np.uint32(inpshape[0]))
-    # print("RETb:", ret)
-    return ret
 
 class Transpose(Function):
   def forward(ctx, x, order=(1,0)):
     ctx.save_for_backward(order)
-    return trans_axis(ctx, x, order)
+    return perm_axis(ctx, x, order)
 
   def backward(ctx, grad_output):
-    return trans_axis(ctx, grad_output, np.argsort(ctx.order))
+    return perm_axis(ctx, grad_output, np.argsort(ctx.order))
 
 # TODO: merge this with perm axis
 def inner_slice(ctx, x, arg):
